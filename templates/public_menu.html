@@ -1,0 +1,239 @@
+{% set restaurant_name = restaurant.translated_name(lang) %}
+{% set restaurant_description = restaurant.translated_description(lang) %}
+<!doctype html>
+<html lang="{{ lang or 'ru' }}" dir="{{ 'rtl' if lang == 'ar' else 'ltr' }}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ restaurant_name }} — меню</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="public theme-soft">
+    <div class="pattern"></div>
+    <div class="phone-frame">
+        <header class="public-hero">
+            <div>
+                <h1 class="brand-title">
+                    {% if restaurant.logo_url() %}
+                        <span class="logo-inline">
+                            <img src="{{ restaurant.logo_url() }}" alt="{{ restaurant_name }}" loading="lazy">
+                        </span>
+                    {% else %}
+                        <span class="logo-circle">{{ restaurant_name[:1] }}</span>
+                    {% endif %}
+                    <span class="sr-only">{{ restaurant_name }}</span>
+                </h1>
+                {% if restaurant_description %}<p class="muted">{{ restaurant_description }}</p>{% endif %}
+            </div>
+        </header>
+
+        <main class="menu-shell">
+            <div class="search-bar">
+                <input type="search" placeholder="{{ t_menu('search') }}" aria-label="{{ t_menu('search') }}" data-search>
+                <button type="button">🔍</button>
+            </div>
+
+            {% if categories %}
+            <div class="accordion" data-accordion>
+                {% for category in categories %}
+                <section class="accordion-item">
+                    <header class="accordion-trigger" data-acc-toggle>
+                        <div class="section-icon">{{ category.translated_name(lang)[:1] }}</div>
+                        <div class="acc-title">
+                            <h2>{{ category.translated_name(lang) }}</h2>
+                        </div>
+                        <div class="chevron">▾</div>
+                    </header>
+                    <div class="accordion-panel" data-acc-panel>
+                        <div class="menu-list">
+                            {% for dish in category.dishes %}
+                            <article class="menu-card{% if not dish.available %} muted-card{% endif %}" data-dish>
+                        <div class="menu-card__thumb">
+                            {% if dish.is_image() %}
+                            <img src="{{ dish.image_url() }}" alt="{{ dish.translated_name(lang) }}">
+                            {% else %}
+                            <div class="thumb-placeholder">{{ dish.translated_name(lang)[:1] }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="menu-card__body">
+                            <div class="menu-card__title">
+                                <h3 data-dish-name>{{ dish.translated_name(lang) }}</h3>
+                                <div class="price">{{ '{:,.2f}'.format(dish.price) }} {{ dish.currency_symbol() }}</div>
+                            </div>
+                            <p class="muted">{{ dish.translated_description(lang) }}</p>
+                            <div class="card-actions">
+                                {% if dish.available %}
+                                <button class="btn add-btn" type="button"
+                                    data-add
+                                    data-id="{{ dish.id }}"
+                                    data-name="{{ dish.translated_name(lang) }}"
+                                    data-price="{{ dish.price }}"
+                                    data-currency="{{ dish.currency_symbol() }}"
+                                >{{ t('add_to_cart') }}</button>
+                                {% endif %}
+                                {% if not dish.available %}<span class="badge">{{ t_menu('not_available') }}</span>{% endif %}
+                            </div>
+                            {% if not dish.available %}<span class="badge">{{ t_menu('not_available') }}</span>{% endif %}
+                        </div>
+                    </article>
+                    {% else %}
+                    <p class="muted">{{ t_menu('no_dishes') }}</p>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </section>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p>{{ t_menu('empty_menu') }}</p>
+            {% endif %}
+        </main>
+    </div>
+
+    <div class="lang-switch top-right">
+        <label class="sr-only" for="lang-select">Language</label>
+        <select id="lang-select" class="lang-select" data-lang-select>
+            {% for code, label in languages.items() %}
+            <option value="{{ code }}" {% if code == lang %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% if table_number %}
+    <div class="cart-bar" data-cart-bar>
+        <div class="cart-info">
+            <div class="muted">{{ t('table_label') }} {{ table_number }}</div>
+            <div class="cart-summary"><span data-cart-count>0</span> {{ t('cart_items') }}</div>
+        </div>
+        <div class="cart-actions">
+            <button class="btn" type="button" data-clear-cart>{{ t('clear_cart') }}</button>
+            <button class="btn primary" type="button" data-call-waiter>{{ t('call_waiter') }}</button>
+        </div>
+    </div>
+    {% endif %}
+
+    <script>
+    const searchInput = document.querySelector('[data-search]');
+    const dishes = document.querySelectorAll('[data-dish]');
+    if (searchInput) {
+        searchInput.addEventListener('input', () => {
+            const term = searchInput.value.toLowerCase().trim();
+            dishes.forEach(card => {
+                const name = card.querySelector('[data-dish-name]').textContent.toLowerCase();
+                card.style.display = name.includes(term) ? 'grid' : 'none';
+            });
+        });
+    }
+    const accordion = document.querySelector('[data-accordion]');
+    if (accordion) {
+        accordion.querySelectorAll('[data-acc-toggle]').forEach((trigger, idx) => {
+            const panel = trigger.nextElementSibling;
+            const chevron = trigger.querySelector('.chevron');
+            if (idx === 0) {
+                panel.style.maxHeight = panel.scrollHeight + 'px';
+                trigger.classList.add('open');
+                chevron.textContent = '▴';
+            }
+            trigger.addEventListener('click', () => {
+                const isOpen = trigger.classList.contains('open');
+                if (isOpen) {
+                    trigger.classList.remove('open');
+                    panel.style.maxHeight = null;
+                    chevron.textContent = '▾';
+                } else {
+                    trigger.classList.add('open');
+                    panel.style.maxHeight = panel.scrollHeight + 'px';
+                    chevron.textContent = '▴';
+                }
+            });
+        });
+    }
+
+    const langSelect = document.querySelector('[data-lang-select]');
+    if (langSelect) {
+        langSelect.addEventListener('change', () => {
+            const nextLang = langSelect.value;
+            const url = new URL(window.location.href);
+            url.searchParams.set('lang', nextLang);
+            window.location.href = url.toString();
+        });
+    }
+
+    const tableNumber = "{{ table_number or '' }}";
+    const addButtons = document.querySelectorAll('[data-add]');
+    const cartCountEl = document.querySelector('[data-cart-count]');
+    const cartKey = tableNumber ? `cart_{{ restaurant.slug }}_${tableNumber}` : null;
+    const cartBar = document.querySelector('[data-cart-bar]');
+
+    function getCart() {
+        if (!cartKey) return [];
+        try { return JSON.parse(localStorage.getItem(cartKey) || '[]'); } catch { return []; }
+    }
+    function setCart(items) {
+        if (!cartKey) return;
+        localStorage.setItem(cartKey, JSON.stringify(items));
+    }
+    function renderCartCount() {
+        if (!cartCountEl) return;
+        const items = getCart();
+        const total = items.reduce((sum, item) => sum + (item.qty || 0), 0);
+        cartCountEl.textContent = total;
+    }
+    addButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (!cartKey) return;
+            const id = btn.dataset.id;
+            const name = btn.dataset.name;
+            const price = parseFloat(btn.dataset.price || '0');
+            const currency = btn.dataset.currency;
+            const items = getCart();
+            const existing = items.find(i => i.id === id);
+            if (existing) {
+                existing.qty += 1;
+            } else {
+                items.push({ id, name, price, currency, qty: 1 });
+            }
+            setCart(items);
+            renderCartCount();
+            if (cartBar) cartBar.classList.add('active');
+        });
+    });
+    renderCartCount();
+
+    const callBtn = document.querySelector('[data-call-waiter]');
+    if (callBtn) {
+        callBtn.addEventListener('click', () => {
+            if (!cartKey || !tableNumber) return;
+            const items = getCart();
+            fetch('{{ url_for("api_call_waiter") }}', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    slug: "{{ restaurant.slug }}",
+                    table: tableNumber,
+                    items
+                })
+            }).then(res => {
+                if (res.ok) {
+                    if (cartBar) cartBar.classList.add('active');
+                    localStorage.removeItem(cartKey);
+                    renderCartCount();
+                    alert("{{ t('call_waiter_sent') }}");
+                } else {
+                    alert("{{ t('call_waiter_error') }}");
+                }
+            }).catch(() => alert("{{ t('call_waiter_error') }}"));
+        });
+    }
+
+    const clearBtn = document.querySelector('[data-clear-cart]');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            if (!cartKey) return;
+            localStorage.removeItem(cartKey);
+            renderCartCount();
+        });
+    }
+
+    </script>
+</body>
+</html>

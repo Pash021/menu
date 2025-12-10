@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="card narrow">
+    <h1>{{ t('dish_title') }} "{{ category.name }}"</h1>
+    <form method="post" enctype="multipart/form-data">
+        {{ form.hidden_tag() }}
+        <label>{{ t('name') }}
+            {{ form.name(class="input") }}
+        </label>
+        <label>{{ t('description') }}
+            {{ form.description(class="input") }}
+        </label>
+        <label>{{ t('price') }}
+            {{ form.price(class="input") }}
+        </label>
+        <label class="checkbox">{{ form.available() }} <span>{{ t('available') }}</span></label>
+        <label>{{ t('currency') }}</label>
+        {{ form.currency(class="input") }}
+        <label>{{ t('logo') }}</label>
+        <div class="dropzone" data-dropzone>
+            {{ form.image(class="file-input") }}
+            <div class="dropzone__text">
+                <strong>{{ t('upload_hint') }}</strong>
+                <p class="muted">PNG, JPG, SVG, PDF</p>
+                <span class="file-name" data-drop-label>{{ t('file_not_selected') }}</span>
+            </div>
+        </div>
+        <button class="btn primary" type="submit">{{ t('save') }}</button>
+        <a class="btn" href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}">{{ t('back') }}</a>
+    </form>
+</section>
+{% endblock %}

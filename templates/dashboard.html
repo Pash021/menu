@@ -1,0 +1,95 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="section-header">
+    <div>
+        <p class="muted">{{ t('dashboard') }}</p>
+        <h1>{{ t('my_restaurants') }}</h1>
+    </div>
+    <a class="btn primary" href="{{ url_for('create_restaurant') }}">{{ t('new_restaurant') }}</a>
+</section>
+
+<div class="grid">
+    {% for restaurant in restaurants %}
+    {% set translated_name = restaurant.translated_name(lang) %}
+    {% set translated_description = restaurant.translated_description(lang) %}
+    <article class="card">
+        <div class="card-header">
+            <div class="avatar">{{ translated_name[:1] }}</div>
+            <div>
+                <h2>{{ translated_name }}</h2>
+                <p class="muted">{{ translated_description or t('no_description') }}</p>
+            </div>
+        </div>
+        <div class="card-actions">
+            <a href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}">{{ t('manage') }}</a>
+            <a href="{{ url_for('public_menu', slug=restaurant.slug) }}" target="_blank">{{ t('public_menu') }}</a>
+            <a href="{{ url_for('restaurant_qr', restaurant_id=restaurant.id) }}">{{ t('qr_code') }}</a>
+        </div>
+    </article>
+    {% else %}
+    <p>{{ t('no_restaurants') if t('no_restaurants') != 'no_restaurants' else '' }}</p>
+    {% endfor %}
+</div>
+
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h2>{{ t('call_waiter') }}</h2>
+            <p class="muted">{{ t('table_label') }}</p>
+        </div>
+    </div>
+    <div class="dish-grid" data-requests-container>
+        <p class="muted">{{ t('no_requests') if t('no_requests') != 'no_requests' else '' }}</p>
+    </div>
+</section>
+
+<script>
+(function() {
+    const container = document.querySelector('[data-requests-container]');
+    if (!container) return;
+
+    const render = (requests) => {
+        container.innerHTML = '';
+        if (!requests.length) {
+            container.innerHTML = `<p class="muted">{{ t('no_requests') if t('no_requests') != 'no_requests' else '' }}</p>`;
+            return;
+        }
+        requests.forEach(req => {
+            const div = document.createElement('div');
+            div.className = 'dish-card';
+            const itemsHtml = (req.items || []).map(item => {
+                return `<li>${item.name || ''} ×${item.qty || 1} (${item.price || ''} ${item.currency || ''})</li>`;
+            }).join('');
+            div.innerHTML = `
+                <div class="dish-head">
+                    <div>
+                        <h4>${req.restaurant || ''}</h4>
+                        <span class="badge inline">{{ t('table_label') }} ${req.table_number}</span>
+                    </div>
+                    <span class="muted">${req.created_at}</span>
+                </div>
+                ${itemsHtml ? `<ul class="bullet-list">${itemsHtml}</ul>` : `<p class="muted">{{ t('call_waiter') }}</p>`}
+            `;
+            container.appendChild(div);
+        });
+    };
+
+    const initial = {{ requests|tojson }};
+    render(initial || []);
+
+    const poll = async () => {
+        try {
+            const res = await fetch('{{ url_for("api_my_call_requests") }}');
+            if (!res.ok) return;
+            const data = await res.json();
+            render(data.requests || []);
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setTimeout(poll, 10000);
+        }
+    };
+    poll();
+})();
+</script>
+{% endblock %}

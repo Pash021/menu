@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% set body_class = 'auth' %}
+{% block content %}
+<section class="auth-hero">
+    <div>
+        <p class="muted">{{ t('login_hero_pre') if t('login_hero_pre') != 'login_hero_pre' else 'QR menu without waiting' }}</p>
+        <h1>{{ t('login_hero_title') if t('login_hero_title') != 'login_hero_title' else 'Create a digital menu and share QR codes' }}</h1>
+        <p class="muted">{{ t('login_hero_sub') if t('login_hero_sub') != 'login_hero_sub' else 'Add restaurants, categories and dishes, generate QR for guests from one dashboard.' }}</p>
+    </div>
+    <div class="card login-card">
+        <h2>{{ t('login') }}</h2>
+        <form method="post" class="stacked-form">
+            {{ form.hidden_tag() }}
+            <label>{{ t('email') }}
+                {{ form.email(class="input soft") }}
+            </label>
+            <label>{{ t('password') }}
+                {{ form.password(class="input soft") }}
+            </label>
+            <button class="btn primary full" type="submit">{{ t('login') }}</button>
+            <p class="muted center">{{ t('no_account') }} <a href="{{ url_for('register') }}">{{ t('register') }}</a></p>
+        </form>
+    </div>
+</section>
+{% endblock %}

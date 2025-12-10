@@ -1,0 +1,1 @@
+Admin pages: /admin/users, /admin/restaurants (access allowed if user email is listed in ADMIN_EMAILS env variable).

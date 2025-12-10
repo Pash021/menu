@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title or 'AiNet Menu Hosting' }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="{{ body_class or '' }}">
+<header class="topbar">
+    <div class="brand">AiNet Menu Hosting</div>
+    <nav>
+        {% if current_user.is_authenticated %}
+            <a href="{{ url_for('dashboard') }}">{{ t('my_restaurants') }}</a>
+            {% if is_admin %}<a href="{{ url_for('admin_users') }}">{{ t('admin') }}</a>{% endif %}
+            <a href="{{ url_for('logout') }}">{{ t('logout') }}</a>
+        {% endif %}
+    </nav>
+    <div class="lang-switch inline">
+        <label class="sr-only" for="lang-select-top">{{ t('language') }}</label>
+        <select id="lang-select-top" class="lang-select" data-lang-select>
+            {% for code, label in languages.items() %}
+            <option value="{{ code }}" {% if code == lang %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</header>
+
+<main class="page">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="flash-container">
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+</main>
+
+<script>
+(function() {
+    const zones = document.querySelectorAll('[data-dropzone]');
+    zones.forEach(zone => {
+        const input = zone.querySelector('input[type="file"]');
+        const label = zone.querySelector('[data-drop-label]');
+        const setLabel = (text) => { if (label) label.textContent = text; };
+        const updateFromInput = () => {
+            if (input && input.files && input.files.length) {
+                setLabel(input.files[0].name);
+            }
+        };
+        zone.addEventListener('click', (e) => {
+            if (e.target.tagName.toLowerCase() === 'input') return;
+            input?.click();
+        });
+        zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
+        zone.addEventListener('dragleave', (e) => { if (e.target === zone) zone.classList.remove('dragover'); });
+        zone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            zone.classList.remove('dragover');
+            const files = e.dataTransfer?.files;
+            if (input && files && files.length) {
+                const dt = new DataTransfer();
+                dt.items.add(files[0]);
+                input.files = dt.files;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
+        input?.addEventListener('change', updateFromInput);
+        updateFromInput();
+    });
+    })();
+
+(function() {
+    const select = document.querySelector('[data-lang-select]');
+    if (!select) return;
+    select.addEventListener('change', () => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('lang', select.value);
+        window.location.href = url.toString();
+    });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="card narrow">
+    <h1>{{ t('add_table') }}</h1>
+    <form method="post">
+        {{ form.hidden_tag() }}
+        <label>{{ t('table_number') }}
+            {{ form.number(class="input") }}
+        </label>
+        <button class="btn primary" type="submit">{{ t('save') }}</button>
+        <a class="btn" href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}">{{ t('back') }}</a>
+    </form>
+</section>
+{% endblock %}

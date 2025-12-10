@@ -1,0 +1,9 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="card narrow center">
+    <h1>{{ t('qr_code') }} {{ restaurant.translated_name(lang) }}</h1>
+    <p class="muted">{{ t('public_link') }}: <a href="{{ menu_url }}" target="_blank">{{ menu_url }}</a></p>
+    <img class="qr" src="{{ url_for('uploaded_file', filename=qr_filename) }}" alt="QR code">
+    <a class="btn" download href="{{ url_for('uploaded_file', filename=qr_filename) }}">{{ t('download') }} PNG</a>
+</section>
+{% endblock %}

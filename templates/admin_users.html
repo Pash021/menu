@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="section-header">
+    <div>
+        <p class="muted">{{ t('admin') }}</p>
+        <h1>{{ t('all_users') }}</h1>
+    </div>
+    <a class="btn" href="{{ url_for('admin_restaurants') }}">{{ t('all_restaurants') }}</a>
+</section>
+
+<div class="grid">
+    {% for user in users %}
+    <article class="card">
+        <div class="card-header">
+            <div>
+                <h3>{{ user.email }}</h3>
+                <p class="muted">{{ t('owner') }} ID: {{ user.id }}</p>
+            </div>
+            <span class="badge">{{ counts.get(user.id, 0) }} {{ t('my_restaurants') }}</span>
+        </div>
+        <div class="card-actions">
+            <a href="{{ url_for('admin_restaurants') }}">{{ t('all_restaurants') }}</a>
+        </div>
+    </article>
+    {% else %}
+    <p class="muted">{{ t('no_users') if t('no_users') != 'no_users' else '' }}</p>
+    {% endfor %}
+</div>
+{% endblock %}

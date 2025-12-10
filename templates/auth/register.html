@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% set body_class = 'auth' %}
+{% block content %}
+<section class="auth-hero">
+    <div>
+        <p class="muted">{{ t('register_hero_pre') if t('register_hero_pre') != 'register_hero_pre' else '' }}</p>
+        <h1>{{ t('register_hero_title') if t('register_hero_title') != 'register_hero_title' else 'Launch your menu in 5 minutes' }}</h1>
+        <p class="muted">{{ t('register_hero_sub') if t('register_hero_sub') != 'register_hero_sub' else 'Logos, dishes, QR — one interface.' }}</p>
+    </div>
+    <div class="card login-card">
+        <h2>{{ t('register') }}</h2>
+        <form method="post" class="stacked-form">
+            {{ form.hidden_tag() }}
+            <label>{{ t('email') }}
+                {{ form.email(class="input soft") }}
+            </label>
+            <label>{{ t('password') }}
+                {{ form.password(class="input soft") }}
+            </label>
+            <label>{{ t('confirm_password') }}
+                {{ form.confirm(class="input soft") }}
+            </label>
+            <button class="btn primary full" type="submit">{{ t('create_account') }}</button>
+            <p class="muted center">{{ t('have_account') }} <a href="{{ url_for('login') }}">{{ t('login') }}</a></p>
+        </form>
+    </div>
+</section>
+{% endblock %}
