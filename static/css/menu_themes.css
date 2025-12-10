@@ -1,0 +1,124 @@
+.menu-page[class*="menu-theme-"] {
+    --primary-contrast: #ffffff;
+}
+
+/* Classic — light, elegant */
+.menu-page.menu-theme-classic {
+    --bg: #f7f3ec;
+    --card: #ffffff;
+    --card-strong: #fdf7ed;
+    --text: #1f2a37;
+    --muted: #6b7280;
+    --primary: #c49a6c;
+    --accent: #7fa65a;
+    --border: #e7ddcc;
+    --shadow: 0 24px 70px rgba(131, 105, 64, 0.14);
+    --font-heading: 'Playfair Display', 'Georgia', serif;
+    --font-body: 'Inter', 'Manrope', system-ui, -apple-system, sans-serif;
+}
+
+/* Dark — minimal with high contrast */
+.menu-page.menu-theme-dark {
+    --bg: #0b1020;
+    --card: #0f172a;
+    --card-strong: #111827;
+    --text: #e5e7eb;
+    --muted: #94a3b8;
+    --primary: #9b1c31;
+    --accent: #0ea5e9;
+    --border: #1f2937;
+    --shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+    --font-heading: 'Playfair Display', 'Manrope', system-ui, serif;
+    --font-body: 'Inter', 'Manrope', system-ui, -apple-system, sans-serif;
+}
+
+/* Modern — pastel, rounded, airy */
+.menu-page.menu-theme-modern {
+    --bg: #f2f6ff;
+    --card: #ffffff;
+    --card-strong: #f5f7fb;
+    --text: #0f172a;
+    --muted: #475569;
+    --primary: #2563eb;
+    --accent: #22c55e;
+    --border: #dce3f2;
+    --shadow: 0 26px 72px rgba(37, 99, 235, 0.12);
+    --font-heading: 'Manrope', 'Inter', system-ui, sans-serif;
+    --font-body: 'Inter', 'Manrope', system-ui, -apple-system, sans-serif;
+}
+
+/* Quick how-to:
+   1) Add a new menu theme by defining `.menu-page.menu-theme-yourname` variables here.
+   2) Pass `menu_theme` from backend and set body/wrapper class to `menu-page menu-theme-{{ menu_theme }}` ONLY on menu pages.
+   3) Admin layout stays neutral because selectors are scoped to `.menu-page`. */
+
+/* Menu font choices */
+.menu-page.menu-font-serif {
+    --font-heading: 'Playfair Display', 'Georgia', serif;
+    --font-body: 'Inter', 'Manrope', system-ui, -apple-system, sans-serif;
+}
+.menu-page.menu-font-sans {
+    --font-heading: 'Manrope', 'Inter', system-ui, sans-serif;
+    --font-body: 'Inter', 'Manrope', system-ui, -apple-system, sans-serif;
+}
+.menu-page.menu-font-display {
+    --font-heading: 'Cinzel', 'Playfair Display', serif;
+    --font-body: 'Manrope', 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Mental theme — warm premium gradient with blurred depth */
+.menu-page.menu-theme-mental {
+    --bg: #140f1d;
+    --card: rgba(255,255,255,0.92);
+    --card-strong: rgba(255,255,255,0.96);
+    --text: #0f172a;
+    --muted: #4b5563;
+    --primary: #b43a58; /* deep wine */
+    --accent: #f1c27d;  /* warm champagne */
+    --border: rgba(255,255,255,0.3);
+    --shadow: 0 28px 80px rgba(0,0,0,0.25);
+    --font-heading: 'Playfair Display', 'Manrope', system-ui, serif;
+    --font-body: 'Inter', 'Manrope', system-ui, -apple-system, sans-serif;
+}
+.menu-page.menu-theme-mental {
+    background: radial-gradient(circle at 20% 18%, rgba(244,197,145,0.18), transparent 32%),
+                radial-gradient(circle at 80% 10%, rgba(180,58,88,0.22), transparent 36%),
+                linear-gradient(160deg, #1a1426 0%, #22142f 40%, #1c1026 80%);
+    position: relative;
+    overflow: hidden;
+}
+.menu-page.menu-theme-mental::before,
+.menu-page.menu-theme-mental::after {
+    content: "";
+    position: fixed;
+    width: 420px;
+    height: 420px;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.45;
+    pointer-events: none;
+    z-index: 0;
+}
+.menu-page.menu-theme-mental::before {
+    background: #b43a58;
+    top: -120px;
+    left: -80px;
+}
+.menu-page.menu-theme-mental::after {
+    background: #f1c27d;
+    bottom: -140px;
+    right: -100px;
+}
+.menu-page.menu-theme-mental .phone-frame,
+.menu-page.menu-theme-mental .card,
+.menu-page.menu-theme-mental .menu-card,
+.menu-page.menu-theme-mental .inline-form,
+.menu-page.menu-theme-mental .cart-sheet__panel {
+    background: var(--card);
+    backdrop-filter: blur(6px);
+}
+.menu-page.menu-theme-mental .menu-shell {
+    position: relative;
+    z-index: 1;
+}
+/* To adjust colors: tweak --primary/--accent above and the radial/linear gradients. */

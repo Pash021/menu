@@ -1,5 +1,7 @@
 {% set restaurant_name = restaurant.translated_name(lang) %}
 {% set restaurant_description = restaurant.translated_description(lang) %}
+{% set menu_font = restaurant and (restaurant.menu_font if restaurant.menu_font is not none else None) or 'serif' %}
+{% set body_class = 'menu-font-' ~ menu_font %}
 <!doctype html>
 <html lang="{{ lang or 'ru' }}" dir="{{ 'rtl' if lang == 'ar' else 'ltr' }}">
 <head>
@@ -7,8 +9,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ restaurant_name }} — меню</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/menu_themes.css') }}">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0" />
 </head>
-<body class="public theme-soft">
+<body class="public-page menu-page menu-theme-{{ restaurant.theme if restaurant and restaurant.theme is not none else 'classic' }} {{ body_class }}">
     <div class="pattern"></div>
     <div class="phone-frame">
         <header class="public-hero">
@@ -21,63 +25,80 @@
                     {% else %}
                         <span class="logo-circle">{{ restaurant_name[:1] }}</span>
                     {% endif %}
-                    <span class="sr-only">{{ restaurant_name }}</span>
                 </h1>
+                <div class="brand-name">{{ restaurant_name }}</div>
                 {% if restaurant_description %}<p class="muted">{{ restaurant_description }}</p>{% endif %}
+                {% if table_number %}<p class="pill">{{ t('table_label') }} {{ table_number }}</p>{% endif %}
             </div>
         </header>
 
         <main class="menu-shell">
             <div class="search-bar">
                 <input type="search" placeholder="{{ t_menu('search') }}" aria-label="{{ t_menu('search') }}" data-search>
-                <button type="button">🔍</button>
+                <button type="button" aria-label="{{ t_menu('search') }}">
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path fill="none" stroke="currentColor" stroke-width="2" d="M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14Zm9 16-4.35-4.35"/>
+                    </svg>
+                </button>
             </div>
 
             {% if categories %}
+            <div class="category-nav">
+                {% for category in categories %}
+                <button class="category-chip" type="button" data-scroll-to="cat-{{ category.id }}">{{ category.translated_name(lang) }}</button>
+                {% endfor %}
+            </div>
             <div class="accordion" data-accordion>
                 {% for category in categories %}
-                {% set last_dish = category.dishes|last if category.dishes else None %}
-                <section class="accordion-item">
+                {% set preview_dish = category.dishes|first if category.dishes else None %}
+                <section class="accordion-item" id="cat-{{ category.id }}">
                     <header class="accordion-trigger" data-acc-toggle>
-                        <div class="section-icon">{{ category.translated_name(lang)[:1] }}</div>
+                        <div class="section-icon icon-font">
+                            {% if category.icon_name %}
+                                <span class="material-symbols-rounded">{{ category.icon_name }}</span>
+                            {% else %}
+                                {{ category.translated_name(lang)[:1] }}
+                            {% endif %}
+                        </div>
                         <div class="acc-title">
                             <h2>{{ category.translated_name(lang) }}</h2>
+                            <p class="muted">{{ t_menu('category') }}</p>
                         </div>
-                        <div class="chevron">▾</div>
+                        <div class="chevron"><svg class="icon chevron-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="m6 9 6 6 6-6"/></svg></div>
                     </header>
-                    {% if last_dish %}
+                    {% if preview_dish %}
                     <div class="category-preview" data-category-preview>
                         <article class="menu-card mini-card">
                             <div class="menu-card__thumb">
-                                {% if last_dish.is_image() %}
-                                <img src="{{ last_dish.image_url() }}" alt="{{ last_dish.translated_name(lang) }}">
+                                {% if preview_dish.is_image() %}
+                                <img src="{{ preview_dish.image_url() }}" alt="{{ preview_dish.translated_name(lang) }}">
                                 {% else %}
-                                <div class="thumb-placeholder">{{ last_dish.translated_name(lang)[:1] }}</div>
+                                <div class="thumb-placeholder">{{ preview_dish.translated_name(lang)[:1] }}</div>
                                 {% endif %}
                             </div>
                             <div class="menu-card__body">
                                 <div class="menu-card__title">
-                                    <h3>{{ last_dish.translated_name(lang) }}</h3>
-                                    <div class="price">{{ '{:,.2f}'.format(last_dish.price) }} {{ last_dish.currency_symbol() }}</div>
+                                    <h3>{{ preview_dish.translated_name(lang) }}</h3>
+                                    <div class="price">{{ '{:,.2f}'.format(preview_dish.price) }} {{ preview_dish.currency_symbol() }}</div>
                                 </div>
-                                {% if last_dish.is_spicy or last_dish.is_vegan %}
+                                {% if preview_dish.is_spicy or preview_dish.is_vegan %}
                                 <div class="dish-tags">
-                                    {% if last_dish.is_spicy %}<span class="tag tag-spicy">{{ t('spicy') }}</span>{% endif %}
-                                    {% if last_dish.is_vegan %}<span class="tag tag-vegan">{{ t('vegan') }}</span>{% endif %}
+                                    {% if preview_dish.is_spicy %}<span class="tag tag-spicy">{{ t('spicy') }}</span>{% endif %}
+                                    {% if preview_dish.is_vegan %}<span class="tag tag-vegan">{{ t('vegan') }}</span>{% endif %}
                                 </div>
                                 {% endif %}
-                                <p class="muted">{{ last_dish.translated_description(lang) }}</p>
+                                <p class="muted">{{ preview_dish.translated_description(lang) }}</p>
                                 <div class="card-actions">
-                                {% if last_dish.available and table_number %}
+                                {% if preview_dish.available and table_number %}
                                 <button class="btn add-btn" type="button"
                                     data-add
-                                    data-id="{{ last_dish.id }}"
-                                    data-name="{{ last_dish.translated_name(lang) }}"
-                                    data-price="{{ last_dish.price }}"
-                                    data-currency="{{ last_dish.currency_symbol() }}"
+                                    data-id="{{ preview_dish.id }}"
+                                    data-name="{{ preview_dish.translated_name(lang) }}"
+                                    data-price="{{ preview_dish.price }}"
+                                    data-currency="{{ preview_dish.currency_symbol() }}"
                                 >{{ t('add_to_cart') }}</button>
                                 {% endif %}
-                                    {% if not last_dish.available %}<span class="badge">{{ t_menu('not_available') }}</span>{% endif %}
+                                    {% if not preview_dish.available %}<span class="badge">{{ t_menu('not_available') }}</span>{% endif %}
                                 </div>
                             </div>
                         </article>
@@ -87,42 +108,44 @@
                         <div class="menu-list">
                             {% for dish in category.dishes %}
                             <article class="menu-card{% if not dish.available %} muted-card{% endif %}" data-dish>
-                        <div class="menu-card__thumb">
-                            {% if dish.is_image() %}
-                            <img src="{{ dish.image_url() }}" alt="{{ dish.translated_name(lang) }}">
+                                <div class="menu-card__thumb">
+                                    {% if dish.is_image() %}
+                                    <img src="{{ dish.image_url() }}" alt="{{ dish.translated_name(lang) }}">
+                                    {% else %}
+                                    <div class="thumb-placeholder">{{ dish.translated_name(lang)[:1] }}</div>
+                                    {% endif %}
+                                </div>
+                                <div class="menu-card__body">
+                                    <div class="menu-card__title">
+                                        <h3 data-dish-name>{{ dish.translated_name(lang) }}</h3>
+                                        <div class="price">{{ '{:,.2f}'.format(dish.price) }} {{ dish.currency_symbol() }}</div>
+                                    </div>
+                                    {% if dish.is_spicy or dish.is_vegan %}
+                                    <div class="dish-tags">
+                                        {% if dish.is_spicy %}<span class="tag tag-spicy">{{ t('spicy') }}</span>{% endif %}
+                                        {% if dish.is_vegan %}<span class="tag tag-vegan">{{ t('vegan') }}</span>{% endif %}
+                                    </div>
+                                    {% endif %}
+                                    <p class="muted">{{ dish.translated_description(lang) }}</p>
+                                    <div class="card-actions">
+                                        {% if dish.available and table_number %}
+                                        <button class="btn add-btn btn-add-cart" type="button"
+                                            data-add
+                                            data-id="{{ dish.id }}"
+                                            data-name="{{ dish.translated_name(lang) }}"
+                                            data-price="{{ dish.price }}"
+                                            data-currency="{{ dish.currency_symbol() }}"
+                                        >
+                                            <span class="btn-add-cart__icon">+</span>
+                                            <span class="btn-add-cart__label">ավելացնել</span>
+                                        </button>
+                                        {% endif %}
+                                        {% if not dish.available %}<span class="badge">{{ t_menu('not_available') }}</span>{% endif %}
+                                    </div>
+                                </div>
+                            </article>
                             {% else %}
-                            <div class="thumb-placeholder">{{ dish.translated_name(lang)[:1] }}</div>
-                            {% endif %}
-                        </div>
-                        <div class="menu-card__body">
-                            <div class="menu-card__title">
-                                <h3 data-dish-name>{{ dish.translated_name(lang) }}</h3>
-                                <div class="price">{{ '{:,.2f}'.format(dish.price) }} {{ dish.currency_symbol() }}</div>
-                            </div>
-                            {% if dish.is_spicy or dish.is_vegan %}
-                            <div class="dish-tags">
-                                {% if dish.is_spicy %}<span class="tag tag-spicy">{{ t('spicy') }}</span>{% endif %}
-                                {% if dish.is_vegan %}<span class="tag tag-vegan">{{ t('vegan') }}</span>{% endif %}
-                            </div>
-                            {% endif %}
-                            <p class="muted">{{ dish.translated_description(lang) }}</p>
-                            <div class="card-actions">
-                                {% if dish.available and table_number %}
-                                <button class="btn add-btn" type="button"
-                                    data-add
-                                    data-id="{{ dish.id }}"
-                                    data-name="{{ dish.translated_name(lang) }}"
-                                    data-price="{{ dish.price }}"
-                                    data-currency="{{ dish.currency_symbol() }}"
-                                >{{ t('add_to_cart') }}</button>
-                                {% endif %}
-                                {% if not dish.available %}<span class="badge">{{ t_menu('not_available') }}</span>{% endif %}
-                            </div>
-                            {% if not dish.available %}<span class="badge">{{ t_menu('not_available') }}</span>{% endif %}
-                        </div>
-                    </article>
-                    {% else %}
-                    <p class="muted">{{ t_menu('no_dishes') }}</p>
+                            <p class="muted">{{ t_menu('no_dishes') }}</p>
                             {% endfor %}
                         </div>
                     </div>
@@ -144,32 +167,38 @@
         </select>
     </div>
     {% if table_number %}
-    <div class="cart-bar collapsed" data-cart-bar>
-        <div class="cart-header">
-            <div class="cart-info">
-                <div class="muted">{{ t('table_label') }} {{ table_number }}</div>
-                <div class="cart-summary"><span data-cart-count>0</span> {{ t('cart_items') }}</div>
-            </div>
-            <button class="btn link cart-toggle" type="button" data-cart-toggle>{{ t('cart_show') }}</button>
-        </div>
-        <div class="cart-details" data-cart-details>
-            <p class="muted">{{ t('cart_empty') if t('cart_empty') != 'cart_empty' else '' }}</p>
-        </div>
-        <div class="cart-actions">
-            <button class="btn" type="button" data-clear-cart>{{ t('clear_cart') }}</button>
-            <button class="btn primary" type="button" data-call-waiter>{{ t('call_waiter') }}</button>
-        </div>
-    </div>
-    <button class="cart-fab" type="button" data-cart-fab>
+    <button class="cart-fab visible" type="button" data-cart-fab>
         <span class="sr-only">{{ t('cart_show') }}</span>
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M7 4H3v2h3.2l3.3 9.4c.14.4.52.6.93.6H18v-2H11l-.4-1.2H19a1 1 0 0 0 .96-.74l2-7H6.2L5.3 4.2A1 1 0 0 0 4.4 4H3v2h2.2l3.3 9.4c.14.4.52.6.93.6H18v-2H11l-.4-1.2H19a1 1 0 0 0 .96-.74l2-7H6.2zM10 20a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5zm7 0a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5z" />
         </svg>
         <span class="cart-fab-count" data-cart-fab-count>0</span>
     </button>
+    <div class="cart-sheet" data-cart-sheet hidden>
+        <div class="cart-sheet__backdrop" data-cart-close></div>
+        <div class="cart-sheet__panel">
+            <div class="cart-sheet__header">
+                <div class="cart-info">
+                    <div class="muted">{{ t('table_label') }} {{ table_number }}</div>
+                    <div class="cart-summary"><span data-cart-count>0</span> {{ t('cart_items') }}</div>
+                </div>
+                <button class="btn link" type="button" data-cart-close aria-label="{{ t('cart_hide') if t('cart_hide') != 'cart_hide' else 'Close' }}">✕</button>
+            </div>
+            <div class="cart-sheet__body">
+                <div class="cart-details" data-cart-details>
+                    <p class="muted">{{ t('cart_empty') if t('cart_empty') != 'cart_empty' else '' }}</p>
+                </div>
+            </div>
+            <div class="cart-actions">
+                <button class="btn" type="button" data-clear-cart>{{ t('clear_cart') }}</button>
+                <button class="btn primary" type="button" data-call-waiter>{{ t('call_waiter') }}</button>
+            </div>
+        </div>
+    </div>
     {% endif %}
 
     <div class="snackbar" data-snackbar></div>
+    <script src="{{ url_for('static', filename='js/menu_ui.js') }}" defer></script>
 
     <script>
     const searchInput = document.querySelector('[data-search]');
@@ -183,57 +212,84 @@
             });
         });
     }
-    const accordion = document.querySelector('[data-accordion]');
-    if (accordion) {
-        accordion.querySelectorAll('[data-acc-toggle]').forEach((trigger) => {
+    (function setupAccordion() {
+        const accordion = document.querySelector('[data-accordion]');
+        if (!accordion) return;
+        const toggles = [...accordion.querySelectorAll('[data-acc-toggle]')];
+        const getPreview = (trigger) => {
+            if (!trigger) return null;
             const preview = trigger.nextElementSibling;
-            const panel = preview && preview.hasAttribute('data-category-preview') ? preview.nextElementSibling : trigger.nextElementSibling;
-            const chevron = trigger.querySelector('.chevron');
-            const item = trigger.closest('.accordion-item');
+            return preview && preview.hasAttribute('data-category-preview') ? preview : null;
+        };
+        const getPanel = (trigger) => {
+            if (!trigger) return null;
+            const preview = getPreview(trigger);
+            return preview ? preview.nextElementSibling : trigger.nextElementSibling;
+        };
+        const setHeight = (panel, open) => {
+            if (!panel) return;
+            panel.style.maxHeight = open ? panel.scrollHeight + 'px' : '0';
+            panel.classList.toggle('open', open);
+        };
+        const closeItem = (trigger) => {
+            const panel = getPanel(trigger);
+            const preview = getPreview(trigger);
+            const chevron = trigger.querySelector('.chevron-icon');
+            trigger.classList.remove('open');
+            trigger.closest('.accordion-item')?.classList.remove('open');
+            setHeight(panel, false);
+            chevron?.classList.remove('rotated');
+            if (preview) preview.style.display = '';
+        };
+        const openItem = (trigger) => {
+            toggles.forEach((btn) => { if (btn !== trigger) closeItem(btn); });
+            const panel = getPanel(trigger);
+            const preview = getPreview(trigger);
+            const chevron = trigger.querySelector('.chevron-icon');
+            trigger.classList.add('open');
+            trigger.closest('.accordion-item')?.classList.add('open');
+            setHeight(panel, true);
+            chevron?.classList.add('rotated');
+            if (preview) preview.style.display = 'none';
+        };
+        toggles.forEach((trigger) => {
             trigger.addEventListener('click', () => {
-                const isOpen = trigger.classList.contains('open');
-                if (isOpen) {
-                    trigger.classList.remove('open');
-                    item?.classList.remove('open');
-                    panel.style.maxHeight = null;
-                    chevron.textContent = '▾';
-                } else {
-                    trigger.classList.add('open');
-                    item?.classList.add('open');
-                    panel.style.maxHeight = panel.scrollHeight + 'px';
-                    chevron.textContent = '▴';
+                trigger.classList.contains('open') ? closeItem(trigger) : openItem(trigger);
+            });
+        });
+        window.addEventListener('resize', () => {
+            toggles.forEach(trigger => {
+                if (trigger.classList.contains('open')) {
+                    setHeight(getPanel(trigger), true);
                 }
             });
         });
-        accordion.querySelectorAll('[data-category-preview]').forEach((preview) => {
-            preview.addEventListener('click', () => {
-                const trigger = preview.previousElementSibling;
-                if (trigger && trigger.hasAttribute('data-acc-toggle') && !trigger.classList.contains('open')) {
-                    trigger.click();
-                }
-            });
-        });
-    }
+        window.openAccordionExclusive = openItem;
+        window.closeAccordionItem = closeItem;
+    })();
 
-    const langSelect = document.querySelector('[data-lang-select]');
-    if (langSelect) {
-        langSelect.addEventListener('change', () => {
-            const nextLang = langSelect.value;
-            const url = new URL(window.location.href);
-            url.searchParams.set('lang', nextLang);
-            window.location.href = url.toString();
+    document.querySelectorAll('[data-scroll-to]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const id = btn.getAttribute('data-scroll-to');
+            const target = document.getElementById(id);
+            if (target) {
+                const trigger = target.querySelector('[data-acc-toggle]');
+                if (trigger) openAccordionExclusive(trigger);
+            }
         });
-    }
+    });
 
     const tableNumber = "{{ table_number or '' }}";
     const addButtons = document.querySelectorAll('[data-add]');
     const cartCountEl = document.querySelector('[data-cart-count]');
     const cartKey = tableNumber ? `cart_{{ restaurant.slug }}_${tableNumber}` : null;
-    const cartBar = document.querySelector('[data-cart-bar]');
+    const cartBar = null;
     const cartDetails = document.querySelector('[data-cart-details]');
-    const cartToggle = document.querySelector('[data-cart-toggle]');
+    const cartToggle = null;
     const cartFab = document.querySelector('[data-cart-fab]');
     const cartFabCount = document.querySelector('[data-cart-fab-count]');
+    const cartSheet = document.querySelector('[data-cart-sheet]');
+    const cartSheetClose = document.querySelectorAll('[data-cart-close]');
 
     function getCart() {
         if (!cartKey) return [];
@@ -244,21 +300,14 @@
         localStorage.setItem(cartKey, JSON.stringify(items));
     }
     function updateCartToggleLabel() {
-        if (!cartToggle || !cartBar) return;
-        const collapsed = cartBar.classList.contains('collapsed');
-            cartToggle.textContent = collapsed ? "▲" : "▼";
+        return;
     }
     function updateCartFab(count = 0) {
-        if (!cartFab || !cartBar) return;
+        if (!cartFab) return;
         if (cartFabCount) {
             cartFabCount.textContent = count;
         }
-        const collapsed = cartBar.classList.contains('collapsed');
-        if (collapsed) {
-            cartFab.classList.add('visible');
-        } else {
-            cartFab.classList.remove('visible');
-        }
+        cartFab.classList.add('visible');
     }
 
     function formatNumber(value) {
@@ -295,40 +344,32 @@
                     .join("");
             }
         }
-        if (cartBar) {
-            if (items.length) {
-                cartBar.classList.add('active');
-                cartBar.classList.remove('collapsed');
-            } else {
-                cartBar.classList.remove('active');
-                cartBar.classList.add('collapsed');
-            }
-            updateCartToggleLabel();
-        }
         updateCartFab(total);
     }
 
-    if (cartToggle && cartBar) {
-        cartToggle.addEventListener('click', () => {
-            cartBar.classList.toggle('collapsed');
-            updateCartToggleLabel();
-            updateCartFab(getCart().reduce((sum, item) => sum + (item.qty || 0), 0));
-        });
-        updateCartToggleLabel();
-    }
-
-    if (cartFab && cartBar) {
-        cartFab.addEventListener('click', () => {
-            cartBar.classList.remove('collapsed');
-            cartBar.classList.add('active');
-            updateCartToggleLabel();
-            updateCartFab(getCart().reduce((sum, item) => sum + (item.qty || 0), 0));
-        });
-    }
+    const openCartSheet = () => {
+        if (cartSheet) {
+            cartSheet.hidden = false;
+            cartSheet.classList.add('visible');
+        }
+    };
+    const closeCartSheet = () => {
+        if (cartSheet) {
+            cartSheet.classList.remove('visible');
+            cartSheet.hidden = true;
+        }
+    };
+    cartFab?.addEventListener('click', openCartSheet);
+    cartSheetClose.forEach(btn => btn.addEventListener('click', closeCartSheet));
+    cartSheet?.addEventListener('click', (e) => {
+        if (e.target === cartSheet) closeCartSheet();
+    });
 
     addButtons.forEach(btn => {
         btn.addEventListener('click', () => {
             if (!cartKey) return;
+            btn.classList.add('pulse');
+            setTimeout(() => btn.classList.remove('pulse'), 220);
             const id = btn.dataset.id;
             const name = btn.dataset.name;
             const price = parseFloat(btn.dataset.price || '0');
@@ -343,7 +384,7 @@
             setCart(items);
             renderCart();
             updateCartToggleLabel();
-            if (cartBar) cartBar.classList.add('active');
+            openCartSheet();
         });
     });
     renderCart();

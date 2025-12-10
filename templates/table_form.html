@@ -1,14 +1,22 @@
 {% extends 'base.html' %}
 {% block content %}
 <section class="card narrow">
-    <h1>{{ t('add_table') }}</h1>
+    <div class="card-header">
+        <div class="card-meta">
+            <p class="muted">{{ restaurant.name }}</p>
+            <h1>{{ t('add_table') }}</h1>
+        </div>
+        <a class="btn" href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}">{{ t('back') }}</a>
+    </div>
     <form method="post">
         {{ form.hidden_tag() }}
         <label>{{ t('table_number') }}
-            {{ form.number(class="input") }}
+            {{ form.number(class="input", type="text", inputmode="numeric", pattern="[0-9]*", placeholder="1") }}
         </label>
-        <button class="btn primary" type="submit">{{ t('save') }}</button>
-        <a class="btn" href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}">{{ t('back') }}</a>
+        <div class="card-actions">
+            <button class="btn primary" type="submit">{{ t('save') }}</button>
+            <a class="btn" href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}">{{ t('back') }}</a>
+        </div>
     </form>
 </section>
 {% endblock %}

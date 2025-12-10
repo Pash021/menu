@@ -40,7 +40,7 @@
                 </form>
                 <a href="{{ url_for('table_qr', table_id=table.id) }}" target="_blank">{{ t('qr_code') }}</a>
                 <form method="post" action="{{ url_for('delete_table', table_id=table.id) }}" onsubmit="return confirm('Delete?');">
-                    <button class="link" type="submit">{{ t('delete') }}</button>
+                    <button class="btn danger small" type="submit">{{ t('delete') }}</button>
                 </form>
             </div>
         </div>

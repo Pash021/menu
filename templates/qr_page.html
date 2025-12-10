@@ -1,9 +1,19 @@
 {% extends 'base.html' %}
+{% set menu_page = True %}
+{% set menu_theme = restaurant.theme if restaurant and restaurant.theme is not none else 'classic' %}
+{% set menu_font = restaurant and (restaurant.menu_font if restaurant.menu_font is not none else None) or 'serif' %}
+{% set body_class = 'menu-font-' ~ menu_font %}
 {% block content %}
 <section class="card narrow center">
-    <h1>{{ t('qr_code') }} {{ restaurant.translated_name(lang) }}</h1>
-    <p class="muted">{{ t('public_link') }}: <a href="{{ menu_url }}" target="_blank">{{ menu_url }}</a></p>
+    <div class="card-meta">
+        <p class="muted">{{ t('qr_code') }}</p>
+        <h1>{{ restaurant.translated_name(lang) }}</h1>
+        <p class="muted">{{ t('public_link') }}: <a href="{{ menu_url }}" target="_blank">{{ menu_url }}</a></p>
+    </div>
     <img class="qr" src="{{ url_for('uploaded_file', filename=qr_filename) }}" alt="QR code">
-    <a class="btn" download href="{{ url_for('uploaded_file', filename=qr_filename) }}">{{ t('download') }} PNG</a>
+    <div class="card-actions" style="justify-content: center;">
+        <a class="btn primary" download href="{{ url_for('uploaded_file', filename=qr_filename) }}">{{ t('download') }} PNG</a>
+        <a class="btn" href="{{ menu_url }}" target="_blank" rel="noopener">{{ t('public_menu') }}</a>
+    </div>
 </section>
 {% endblock %}

@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import datetime
 
 from dotenv import load_dotenv
+from markupsafe import Markup
 
 try:
     from googletrans import Translator  # type: ignore
@@ -41,7 +42,7 @@ from flask_login import (
     logout_user,
 )
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import text
+from sqlalchemy import text, inspect
 from sqlalchemy.exc import IntegrityError
 from flask_wtf import FlaskForm
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -75,6 +76,23 @@ LANGUAGES = {
 
 DEFAULT_LANG = os.environ.get("DEFAULT_LANG", "hy")
 ADMIN_EMAILS = {email.strip().lower() for email in os.environ.get("ADMIN_EMAILS", "").split(",") if email.strip()}
+
+CATEGORY_ICON_CHOICES = [
+    ("", "Без иконки"),
+    ("bakery_dining", "Выпечка"),
+    ("local_pizza", "Пицца"),
+    ("lunch_dining", "Бургер/сэндвич"),
+    ("ramen_dining", "Лапша/суп"),
+    ("kebab_dining", "Гриль/шашлык"),
+    ("icecream", "Десерт/мороженое"),
+    ("cake", "Торт"),
+    ("coffee", "Кофе/чай"),
+    ("emoji_food_beverage", "Напитки"),
+    ("set_meal", "Основные блюда"),
+    ("egg_alt", "Завтрак"),
+    ("fish", "Рыба"),
+    ("spa", "Вегетарианское/здоровое"),
+]
 
 TRANSLATIONS = {
     "ru": {
@@ -964,6 +982,8 @@ class Restaurant(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     name = db.Column(db.String(150), nullable=False)
     description = db.Column(db.Text, nullable=True)
+    theme = db.Column(db.String(32), default="classic")
+    menu_font = db.Column(db.String(32), default="serif")
     name_translations = db.Column(db.JSON, default=dict)
     description_translations = db.Column(db.JSON, default=dict)
     slug = db.Column(db.String(180), unique=True, nullable=False)
@@ -997,6 +1017,7 @@ class Category(db.Model):
     sort_order = db.Column(db.Integer, default=0)
     restaurant_id = db.Column(db.Integer, db.ForeignKey("restaurant.id"), nullable=False)
     name_translations = db.Column(db.JSON, default=dict)
+    icon_name = db.Column(db.String(64), nullable=True)
     dishes = db.relationship(
         "Dish",
         backref="category",
@@ -1363,11 +1384,22 @@ class RestaurantForm(FlaskForm):
     name = StringField("Название", validators=[DataRequired(), Length(max=150)])
     description = TextAreaField("Описание", validators=[Length(max=1000)])
     logo = FileField("Логотип (PNG/JPG)")
+    theme = SelectField(
+        "Тема меню",
+        choices=[("classic", "Classic"), ("dark", "Dark"), ("modern", "Modern"), ("mental", "Mental")],
+        default="classic",
+    )
+    menu_font = SelectField(
+        "Шрифт меню",
+        choices=[("serif", "Serif"), ("sans", "Sans"), ("display", "Display")],
+        default="serif",
+    )
 
 
 class CategoryForm(FlaskForm):
     name = StringField("Название", validators=[DataRequired(), Length(max=120)])
     sort_order = IntegerField("Порядок", default=0, validators=[NumberRange(min=0, max=999)])
+    icon_name = SelectField("Иконка категории", choices=CATEGORY_ICON_CHOICES, default="")
 
 
 class DishForm(FlaskForm):
@@ -1648,6 +1680,8 @@ def create_restaurant():
         restaurant = Restaurant(
             name=form.name.data,
             description=form.description.data,
+            theme=form.theme.data or "classic",
+            menu_font=form.menu_font.data or "serif",
             slug=unique_slug(form.name.data),
             logo_filename=logo_filename,
             owner=current_user,
@@ -1678,6 +1712,8 @@ def edit_restaurant(restaurant_id: int):
     if form.validate_on_submit():
         restaurant.name = form.name.data
         restaurant.description = form.description.data
+        restaurant.theme = form.theme.data or restaurant.theme or "classic"
+        restaurant.menu_font = form.menu_font.data or restaurant.menu_font or "serif"
         name_translations_raw = extract_translation_submission("name")
         desc_translations_raw = extract_translation_submission("description")
         name_translations = restaurant.name_translations or {}
@@ -1711,7 +1747,14 @@ def manage_restaurant(restaurant_id: int):
     restaurant = require_restaurant_owned(restaurant_id)
     categories = Category.query.filter_by(restaurant_id=restaurant.id).order_by(Category.name.asc()).all()
     tables = DiningTable.query.filter_by(restaurant_id=restaurant.id).order_by(DiningTable.number).all()
-    return render_template("restaurant_manage.html", restaurant=restaurant, categories=categories, tables=tables)
+    dish_forms = {cat.id: DishForm() for cat in categories}
+    return render_template(
+        "restaurant_manage.html",
+        restaurant=restaurant,
+        categories=categories,
+        tables=tables,
+        dish_forms=dish_forms,
+    )
 
 
 @app.route("/restaurants/<int:restaurant_id>/categories/new", methods=["GET", "POST"])
@@ -1720,7 +1763,12 @@ def create_category(restaurant_id: int):
     restaurant = require_restaurant_owned(restaurant_id)
     form = CategoryForm()
     if form.validate_on_submit():
-        category = Category(name=form.name.data, sort_order=form.sort_order.data or 0, restaurant=restaurant)
+        category = Category(
+            name=form.name.data,
+            sort_order=form.sort_order.data or 0,
+            icon_name=form.icon_name.data or None,
+            restaurant=restaurant,
+        )
         populate_translations_for_category(category)
         db.session.add(category)
         db.session.commit()
@@ -1739,6 +1787,7 @@ def edit_category(category_id: int):
     if form.validate_on_submit():
         category.name = form.name.data
         category.sort_order = form.sort_order.data or 0
+        category.icon_name = form.icon_name.data or None
         populate_translations_for_category(category)
         db.session.commit()
         flash_t("category_updated", "success")
@@ -1966,6 +2015,27 @@ def set_lang():
 
 with app.app_context():
     db.create_all()
+    # Ensure new optional columns exist for theme and menu font (safe for SQLite/MySQL)
+    inspector = inspect(db.engine)
+    columns = {col["name"] for col in inspector.get_columns("restaurant")} if inspector.has_table("restaurant") else set()
+    with db.engine.begin() as conn:
+        if "theme" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN theme VARCHAR(32)"))
+            except Exception:
+                pass
+        if "menu_font" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_font VARCHAR(32)"))
+            except Exception:
+                pass
+    category_columns = {col["name"] for col in inspector.get_columns("category")} if inspector.has_table("category") else set()
+    if "icon_name" not in category_columns and inspector.has_table("category"):
+        try:
+            with db.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE category ADD COLUMN icon_name VARCHAR(64)"))
+        except Exception:
+            pass
 
 
 def build_ssl_context() -> tuple[str, str] | None:

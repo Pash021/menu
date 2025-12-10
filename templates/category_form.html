@@ -1,7 +1,13 @@
 {% extends 'base.html' %}
 {% block content %}
 <section class="card narrow">
-    <h1>{{ t('category_title') }} {{ restaurant.name }}</h1>
+    <div class="card-header">
+        <div>
+            <p class="muted">{{ restaurant.name }}</p>
+            <h1>{{ t('category_title') }} {{ restaurant.name }}</h1>
+        </div>
+        <a class="btn" href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}">{{ t('back') }}</a>
+    </div>
     <form method="post">
         {{ form.hidden_tag() }}
         <label>{{ t('name') }}
@@ -10,8 +16,24 @@
         <label>{{ t('order') }}
             {{ form.sort_order(class="input") }}
         </label>
-        <button class="btn primary" type="submit">{{ t('save') }}</button>
-        <a class="btn" href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}">{{ t('back') }}</a>
+        <label>{{ t('category') }} иконка</label>
+        <div class="card-actions" style="align-items: center; gap: 12px;">
+            <span class="pill icon-font material-symbols-rounded" data-icon-preview>{{ form.icon_name.data or '' }}</span>
+            {{ form.icon_name(class="input", data_icon_select=True) }}
+        </div>
+        <div class="card-actions">
+            <button class="btn primary" type="submit">{{ t('save') }}</button>
+            <a class="btn" href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}">{{ t('back') }}</a>
+        </div>
     </form>
 </section>
+<script>
+const iconSelect = document.querySelector('[data_icon_select]');
+const iconPreview = document.querySelector('[data-icon-preview]');
+if (iconSelect && iconPreview) {
+    const updateIcon = () => { iconPreview.textContent = iconSelect.value || ''; };
+    iconSelect.addEventListener('change', updateIcon);
+    updateIcon();
+}
+</script>
 {% endblock %}

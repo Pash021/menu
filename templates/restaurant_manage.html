@@ -1,11 +1,26 @@
 {% extends 'base.html' %}
+{% set current_theme = restaurant.theme if restaurant and restaurant.theme is not none else 'classic' %}
 {% block content %}
+<section class="card">
+    <div class="card-header">
+        <div class="card-meta">
+            <p class="muted">{{ t('manage') }}</p>
+            <h2>{{ restaurant.translated_name(lang) }}</h2>
+            <p class="muted">{{ t('public_link') }}: <a href="{{ url_for('public_menu', slug=restaurant.slug) }}" target="_blank">{{ url_for('public_menu', slug=restaurant.slug, _external=True) }}</a></p>
+        </div>
+        <div class="card-actions">
+            <a class="btn" href="{{ url_for('restaurant_qr', restaurant_id=restaurant.id) }}">{{ t('qr_code') }}</a>
+            <a class="btn" href="{{ url_for('edit_restaurant', restaurant_id=restaurant.id) }}">{{ t('restaurant_form_edit') }}</a>
+            <a class="btn primary" href="{{ url_for('create_category', restaurant_id=restaurant.id) }}">{{ t('add_category') }}</a>
+        </div>
+    </div>
+    <div class="card-actions" style="justify-content: space-between;">
+        <span class="pill">{{ t('drag_hint') }}</span>
+    </div>
+</section>
+
 <div class="section-header">
     <h2>{{ t('categories') }}</h2>
-    <div class="card-actions">
-        <span class="muted">{{ t('drag_hint') }}</span>
-        <a class="btn primary" href="{{ url_for('create_category', restaurant_id=restaurant.id) }}">{{ t('add_category') }}</a>
-    </div>
 </div>
 
 <div class="drag-list" data-drag-root data-restaurant-id="{{ restaurant.id }}">
@@ -15,15 +30,63 @@
         <div class="drag-handle">⋮⋮</div>
         <div>
             <p class="muted">{{ t('order') }}: {{ loop.index }}</p>
-            <h3>{{ category.name }}</h3>
+            <h3>
+                {% if category.icon_name %}
+                    <span class="material-symbols-rounded icon-font">{{ category.icon_name }}</span>
+                {% endif %}
+                {{ category.name }}
+            </h3>
         </div>
         <div class="card-actions">
+            <button class="btn" type="button" data-inline-toggle data-target="inline-form-{{ category.id }}">{{ t('add_dish') }}</button>
             <a href="{{ url_for('edit_category', category_id=category.id) }}">{{ t('edit') }}</a>
             <form method="post" action="{{ url_for('delete_category', category_id=category.id) }}" onsubmit="return confirm('Delete?');">
-                <button class="link" type="submit">{{ t('delete') }}</button>
+                <button class="btn danger small" type="submit">{{ t('delete') }}</button>
             </form>
-            <a class="btn" href="{{ url_for('create_dish', category_id=category.id) }}">{{ t('add_dish') }}</a>
         </div>
+    </div>
+    {% set form = dish_forms.get(category.id) %}
+    <div class="inline-form-wrap" id="inline-form-{{ category.id }}" data-inline-container>
+        <form class="inline-form" method="post" enctype="multipart/form-data" data-inline-form data-category-id="{{ category.id }}" action="{{ url_for('create_dish', category_id=category.id) }}">
+            {{ form.hidden_tag() }}
+            <div class="inline-grid">
+                <div>
+                    <label>{{ t('name') }}
+                        {{ form.name(class="input") }}
+                    </label>
+                    <label>{{ t('description') }}
+                        {{ form.description(class="input") }}
+                    </label>
+                </div>
+                <div>
+                    <label>{{ t('price') }}
+                        {{ form.price(class="input", type="text", inputmode="decimal", placeholder="0.00") }}
+                    </label>
+                    <label>{{ t('currency') }}
+                        {{ form.currency(class="input") }}
+                    </label>
+                    <div class="checkbox">{{ form.available() }} <span>{{ t('available') }}</span></div>
+                    <div class="checkbox">{{ form.is_spicy() }} <span>{{ t('spicy') }}</span></div>
+                    <div class="checkbox">{{ form.is_vegan() }} <span>{{ t('vegan') }}</span></div>
+                </div>
+                <div>
+                    <label>{{ t('logo') }}</label>
+                    <div class="dropzone" data-dropzone>
+                        {{ form.image(class="file-input") }}
+                        <div class="dropzone__text">
+                            <strong>{{ t('upload_hint') }}</strong>
+                            <p class="muted">PNG, JPG, SVG, PDF</p>
+                            <span class="file-name" data-drop-label>{{ t('file_not_selected') }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="inline-actions">
+                <button class="btn" type="button" data-add-queue>{{ t('add_dish') }}</button>
+                <button class="btn primary" type="button" data-publish-queue data-category-id="{{ category.id }}">{{ t('save') }} (<span data-queue-count>0</span>)</button>
+                <button class="btn secondary" type="button" data-inline-toggle data-target="inline-form-{{ category.id }}">{{ t('cancel') }}</button>
+            </div>
+        </form>
     </div>
     <div class="dish-grid">
         {% for dish in category.dishes %}
@@ -50,7 +113,7 @@
             <div class="card-actions">
                 <a href="{{ url_for('edit_dish', dish_id=dish.id) }}">{{ t('edit') }}</a>
                 <form method="post" action="{{ url_for('delete_dish', dish_id=dish.id) }}" onsubmit="return confirm('Delete?');">
-                    <button class="link" type="submit">{{ t('delete') }}</button>
+                    <button class="btn danger small" type="submit">{{ t('delete') }}</button>
                 </form>
             </div>
         </div>
@@ -63,6 +126,128 @@
 <p class="muted">{{ t('add_category') }}</p>
 {% endfor %}
 </div>
+
+<div class="modal-backdrop" data-publish-modal hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+        <h3>{{ t('confirm') }}</h3>
+        <p class="muted" data-modal-text></p>
+        <div class="modal-actions">
+            <button class="btn secondary" type="button" data-modal-cancel>{{ t('cancel') }}</button>
+            <button class="btn primary" type="button" data-modal-confirm>{{ t('save') }}</button>
+        </div>
+    </div>
+</div>
+
+<script>
+document.querySelectorAll('[data-inline-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const targetId = btn.getAttribute('data-target');
+        const wrap = document.getElementById(targetId);
+        if (!wrap) return;
+        wrap.classList.toggle('active');
+    });
+});
+
+(function batchDishes() {
+    const queues = {};
+    const publishing = {};
+    const forms = document.querySelectorAll('[data-inline-form]');
+    const modal = document.querySelector('[data-publish-modal]');
+    const textEl = modal?.querySelector('[data-modal-text]');
+    const confirmBtn = modal?.querySelector('[data-modal-confirm]');
+    const cancelBtn = modal?.querySelector('[data-modal-cancel]');
+    let onConfirm = null;
+
+    const updateCount = (form) => {
+        const catId = form.getAttribute('data-category-id');
+        const countEl = form.querySelector('[data-queue-count]');
+        const count = (queues[catId] || []).length;
+        if (countEl) countEl.textContent = count;
+    };
+
+    const addToQueue = (form) => {
+        const catId = form.getAttribute('data-category-id');
+        const data = new FormData(form);
+        const fields = {};
+        data.forEach((val, key) => {
+            if (key === 'image') return;
+            fields[key] = val;
+        });
+        if (!fields.name || !String(fields.name).trim()) {
+            return;
+        }
+        const imageInput = form.querySelector('input[type="file"]');
+        const imageFile = imageInput && imageInput.files && imageInput.files[0] ? imageInput.files[0] : null;
+        queues[catId] = queues[catId] || [];
+        queues[catId].push({ fields, imageFile });
+        const csrf = form.querySelector('input[name="csrf_token"]')?.value || "";
+        form.reset();
+        const csrfInput = form.querySelector('input[name="csrf_token"]');
+        if (csrfInput) csrfInput.value = csrf;
+        updateCount(form);
+    };
+
+    const publishQueue = async (form) => {
+        const catId = form.getAttribute('data-category-id');
+        const queue = queues[catId] || [];
+        if (!queue.length || publishing[catId]) return;
+        publishing[catId] = true;
+        const action = form.getAttribute('action');
+        for (const item of queue) {
+            const payload = new FormData();
+            Object.entries(item.fields).forEach(([k, v]) => payload.append(k, v));
+            if (item.imageFile) payload.append('image', item.imageFile);
+            await fetch(action, { method: 'POST', body: payload });
+        }
+        queues[catId] = [];
+        updateCount(form);
+        publishing[catId] = false;
+        window.location.reload();
+    };
+
+    const closeModal = () => {
+        if (modal) modal.hidden = true;
+        if (confirmBtn) confirmBtn.onclick = null;
+        if (cancelBtn) cancelBtn.onclick = null;
+        onConfirm = null;
+        document.removeEventListener('keydown', escHandler);
+    };
+
+    const escHandler = (e) => { if (e.key === 'Escape') closeModal(); };
+
+    const openModal = (message, confirmFn) => {
+        if (!modal || !textEl || !confirmBtn || !cancelBtn) {
+            confirmFn();
+            return;
+        }
+        textEl.textContent = message;
+        modal.hidden = false;
+        onConfirm = confirmFn;
+        confirmBtn.onclick = () => { onConfirm?.(); closeModal(); };
+        cancelBtn.onclick = closeModal;
+        modal.addEventListener('click', (ev) => {
+            if (ev.target === modal) closeModal();
+        }, { once: true });
+        document.addEventListener('keydown', escHandler);
+    };
+
+    forms.forEach((form) => {
+        const addBtn = form.querySelector('[data-add-queue]');
+        const publishBtn = form.querySelector('[data-publish-queue]');
+        addBtn?.addEventListener('click', () => addToQueue(form));
+        publishBtn?.addEventListener('click', () => {
+            const catId = form.getAttribute('data-category-id');
+            const queue = queues[catId] || [];
+            if (!queue.length) return;
+            openModal(
+                `${queue.length} ${queue.length === 1 ? 'позиция' : 'позиций'} будет опубликовано`,
+                () => publishQueue(form)
+            );
+        });
+        updateCount(form);
+    });
+})();
+</script>
 
 <script>
 const dragRoot = document.querySelector('[data-drag-root]');

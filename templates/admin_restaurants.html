@@ -12,13 +12,28 @@
     {% for restaurant in restaurants %}
     <article class="card">
         <div class="card-header">
-            <div>
+            <div class="avatar">{{ restaurant.translated_name(lang)[:1] }}</div>
+            <div class="card-meta">
                 <h3>{{ restaurant.translated_name(lang) }}</h3>
                 <p class="muted">{{ restaurant.translated_description(lang) or t('no_description') }}</p>
                 <p class="muted">{{ t('owner') }}: {{ restaurant.owner.email }}</p>
                 <p class="muted">Slug: {{ restaurant.slug }}</p>
             </div>
-            <a class="btn" href="{{ url_for('public_menu', slug=restaurant.slug) }}" target="_blank">{{ t('public_menu') }}</a>
+            <div class="card-actions">
+                <a class="btn" href="{{ url_for('public_menu', slug=restaurant.slug) }}" target="_blank">{{ t('public_menu') }}</a>
+                <a class="btn" href="{{ url_for('restaurant_qr', restaurant_id=restaurant.id) }}">{{ t('qr_code') }}</a>
+            </div>
+        </div>
+        <div class="card-actions" style="align-items: flex-start;">
+            <div>
+                <label for="theme-{{ restaurant.id }}">Theme</label>
+                <select id="theme-{{ restaurant.id }}" class="input" data-theme-picker data-default-theme="{{ restaurant.theme if restaurant.theme is not none else 'classic' }}" data-theme-target=".menu-page">
+                    <option value="classic" {% if restaurant.theme == 'classic' %}selected{% endif %}>Classic</option>
+                    <option value="dark" {% if restaurant.theme == 'dark' %}selected{% endif %}>Dark</option>
+                    <option value="modern" {% if restaurant.theme == 'modern' %}selected{% endif %}>Modern</option>
+                </select>
+                <p class="muted">UI only: connect to restaurant.theme in admin later.</p>
+            </div>
         </div>
     </article>
     {% else %}

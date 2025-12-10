@@ -10,6 +10,12 @@
         <label>{{ t('description') }}
             {{ form.description(class="input") }}
         </label>
+        <label for="theme-select">{{ t('public_menu') }} theme</label>
+        {{ form.theme(class="input", id="theme-select") }}
+        <p class="muted">Сохраняется вместе с рестораном, влияет только на публичное меню.</p>
+        <label for="font-select">Шрифт меню</label>
+        {{ form.menu_font(class="input", id="font-select") }}
+        <p class="muted">Сохраняется вместе с рестораном, влияет только на публичное меню.</p>
         {% if translation_values %}
         <section class="translations">
             <h2>{{ t('translations') }}</h2>
@@ -48,8 +54,10 @@
                 </span>
             </div>
         </div>
-        <button class="btn primary" type="submit">{{ t('save') }}</button>
-        <a class="btn" href="{{ url_for('dashboard') }}">{{ t('cancel') }}</a>
+        <div class="card-actions">
+            <button class="btn primary" type="submit">{{ t('save') }}</button>
+            <a class="btn" href="{{ url_for('dashboard') }}">{{ t('cancel') }}</a>
+        </div>
     </form>
 </section>
 {% endblock %}

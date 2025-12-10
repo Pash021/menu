@@ -13,7 +13,8 @@
     {% set user_restaurants = restaurants_by_user.get(user.id, []) %}
     <article class="card">
         <div class="card-header">
-            <div>
+            <div class="avatar">{{ user.email[:1]|upper }}</div>
+            <div class="card-meta">
                 <h3>{{ user.email }}</h3>
                 <p class="muted">{{ t('owner') }} ID: {{ user.id }}</p>
             </div>
@@ -22,15 +23,26 @@
         {% if user_restaurants %}
         <div class="card-actions" style="flex-direction: column; align-items: stretch; gap: 12px;">
             {% for restaurant in user_restaurants %}
-            <div style="display: flex; justify-content: space-between; gap: 10px; align-items: center; border: 1px solid var(--border); border-radius: 10px; padding: 10px;">
-                <div>
-                    <strong>{{ restaurant.translated_name(lang) }}</strong>
-                    <p class="muted" style="margin: 4px 0 0;">Slug: {{ restaurant.slug }}</p>
+            <div class="card" style="margin-bottom: 0; box-shadow: none;">
+                <div class="card-header">
+                    <div class="card-meta">
+                        <strong>{{ restaurant.translated_name(lang) }}</strong>
+                        <p class="muted" style="margin: 4px 0 0;">Slug: {{ restaurant.slug }}</p>
+                    </div>
+                    <div class="pill">{{ t('public_menu') }}</div>
                 </div>
-                <div class="card-actions" style="margin: 0; gap: 8px;">
+                <div class="card-actions" style="margin: 0; gap: 8px; justify-content: space-between;">
+                    <div>
+                        <label for="theme-admin-{{ restaurant.id }}">Theme</label>
+                        <select id="theme-admin-{{ restaurant.id }}" class="input" data-theme-picker data-default-theme="{{ restaurant.theme if restaurant.theme is not none else 'classic' }}" data-theme-target=".menu-page">
+                            <option value="classic" {% if restaurant.theme == 'classic' %}selected{% endif %}>Classic</option>
+                            <option value="dark" {% if restaurant.theme == 'dark' %}selected{% endif %}>Dark</option>
+                            <option value="modern" {% if restaurant.theme == 'modern' %}selected{% endif %}>Modern</option>
+                        </select>
+                    </div>
                     <a class="btn" href="{{ url_for('edit_restaurant', restaurant_id=restaurant.id) }}">{{ t('edit') }}</a>
                     <form method="post" action="{{ url_for('admin_delete_restaurant', restaurant_id=restaurant.id) }}" onsubmit="return confirm('Delete this restaurant?');">
-                        <button class="btn" type="submit">{{ t('delete') }}</button>
+                        <button class="btn danger small" type="submit">{{ t('delete') }}</button>
                     </form>
                 </div>
             </div>

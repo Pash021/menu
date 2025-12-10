@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% set body_class = (body_class ~ ' dashboard-page') if body_class else 'dashboard-page' %}
 {% block content %}
 <div class="dashboard-shell">
     {% include 'dashboard/sidebar.html' %}
