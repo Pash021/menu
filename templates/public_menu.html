@@ -36,6 +36,7 @@
             {% if categories %}
             <div class="accordion" data-accordion>
                 {% for category in categories %}
+                {% set last_dish = category.dishes|last if category.dishes else None %}
                 <section class="accordion-item">
                     <header class="accordion-trigger" data-acc-toggle>
                         <div class="section-icon">{{ category.translated_name(lang)[:1] }}</div>
@@ -44,6 +45,44 @@
                         </div>
                         <div class="chevron">▾</div>
                     </header>
+                    {% if last_dish %}
+                    <div class="category-preview" data-category-preview>
+                        <article class="menu-card mini-card">
+                            <div class="menu-card__thumb">
+                                {% if last_dish.is_image() %}
+                                <img src="{{ last_dish.image_url() }}" alt="{{ last_dish.translated_name(lang) }}">
+                                {% else %}
+                                <div class="thumb-placeholder">{{ last_dish.translated_name(lang)[:1] }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="menu-card__body">
+                                <div class="menu-card__title">
+                                    <h3>{{ last_dish.translated_name(lang) }}</h3>
+                                    <div class="price">{{ '{:,.2f}'.format(last_dish.price) }} {{ last_dish.currency_symbol() }}</div>
+                                </div>
+                                {% if last_dish.is_spicy or last_dish.is_vegan %}
+                                <div class="dish-tags">
+                                    {% if last_dish.is_spicy %}<span class="tag tag-spicy">{{ t('spicy') }}</span>{% endif %}
+                                    {% if last_dish.is_vegan %}<span class="tag tag-vegan">{{ t('vegan') }}</span>{% endif %}
+                                </div>
+                                {% endif %}
+                                <p class="muted">{{ last_dish.translated_description(lang) }}</p>
+                                <div class="card-actions">
+                                {% if last_dish.available and table_number %}
+                                <button class="btn add-btn" type="button"
+                                    data-add
+                                    data-id="{{ last_dish.id }}"
+                                    data-name="{{ last_dish.translated_name(lang) }}"
+                                    data-price="{{ last_dish.price }}"
+                                    data-currency="{{ last_dish.currency_symbol() }}"
+                                >{{ t('add_to_cart') }}</button>
+                                {% endif %}
+                                    {% if not last_dish.available %}<span class="badge">{{ t_menu('not_available') }}</span>{% endif %}
+                                </div>
+                            </div>
+                        </article>
+                    </div>
+                    {% endif %}
                     <div class="accordion-panel" data-acc-panel>
                         <div class="menu-list">
                             {% for dish in category.dishes %}
@@ -60,9 +99,15 @@
                                 <h3 data-dish-name>{{ dish.translated_name(lang) }}</h3>
                                 <div class="price">{{ '{:,.2f}'.format(dish.price) }} {{ dish.currency_symbol() }}</div>
                             </div>
+                            {% if dish.is_spicy or dish.is_vegan %}
+                            <div class="dish-tags">
+                                {% if dish.is_spicy %}<span class="tag tag-spicy">{{ t('spicy') }}</span>{% endif %}
+                                {% if dish.is_vegan %}<span class="tag tag-vegan">{{ t('vegan') }}</span>{% endif %}
+                            </div>
+                            {% endif %}
                             <p class="muted">{{ dish.translated_description(lang) }}</p>
                             <div class="card-actions">
-                                {% if dish.available %}
+                                {% if dish.available and table_number %}
                                 <button class="btn add-btn" type="button"
                                     data-add
                                     data-id="{{ dish.id }}"
@@ -99,17 +144,32 @@
         </select>
     </div>
     {% if table_number %}
-    <div class="cart-bar" data-cart-bar>
-        <div class="cart-info">
-            <div class="muted">{{ t('table_label') }} {{ table_number }}</div>
-            <div class="cart-summary"><span data-cart-count>0</span> {{ t('cart_items') }}</div>
+    <div class="cart-bar collapsed" data-cart-bar>
+        <div class="cart-header">
+            <div class="cart-info">
+                <div class="muted">{{ t('table_label') }} {{ table_number }}</div>
+                <div class="cart-summary"><span data-cart-count>0</span> {{ t('cart_items') }}</div>
+            </div>
+            <button class="btn link cart-toggle" type="button" data-cart-toggle>{{ t('cart_show') }}</button>
+        </div>
+        <div class="cart-details" data-cart-details>
+            <p class="muted">{{ t('cart_empty') if t('cart_empty') != 'cart_empty' else '' }}</p>
         </div>
         <div class="cart-actions">
             <button class="btn" type="button" data-clear-cart>{{ t('clear_cart') }}</button>
             <button class="btn primary" type="button" data-call-waiter>{{ t('call_waiter') }}</button>
         </div>
     </div>
+    <button class="cart-fab" type="button" data-cart-fab>
+        <span class="sr-only">{{ t('cart_show') }}</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M7 4H3v2h3.2l3.3 9.4c.14.4.52.6.93.6H18v-2H11l-.4-1.2H19a1 1 0 0 0 .96-.74l2-7H6.2L5.3 4.2A1 1 0 0 0 4.4 4H3v2h2.2l3.3 9.4c.14.4.52.6.93.6H18v-2H11l-.4-1.2H19a1 1 0 0 0 .96-.74l2-7H6.2zM10 20a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5zm7 0a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5z" />
+        </svg>
+        <span class="cart-fab-count" data-cart-fab-count>0</span>
+    </button>
     {% endif %}
+
+    <div class="snackbar" data-snackbar></div>
 
     <script>
     const searchInput = document.querySelector('[data-search]');
@@ -125,24 +185,31 @@
     }
     const accordion = document.querySelector('[data-accordion]');
     if (accordion) {
-        accordion.querySelectorAll('[data-acc-toggle]').forEach((trigger, idx) => {
-            const panel = trigger.nextElementSibling;
+        accordion.querySelectorAll('[data-acc-toggle]').forEach((trigger) => {
+            const preview = trigger.nextElementSibling;
+            const panel = preview && preview.hasAttribute('data-category-preview') ? preview.nextElementSibling : trigger.nextElementSibling;
             const chevron = trigger.querySelector('.chevron');
-            if (idx === 0) {
-                panel.style.maxHeight = panel.scrollHeight + 'px';
-                trigger.classList.add('open');
-                chevron.textContent = '▴';
-            }
+            const item = trigger.closest('.accordion-item');
             trigger.addEventListener('click', () => {
                 const isOpen = trigger.classList.contains('open');
                 if (isOpen) {
                     trigger.classList.remove('open');
+                    item?.classList.remove('open');
                     panel.style.maxHeight = null;
                     chevron.textContent = '▾';
                 } else {
                     trigger.classList.add('open');
+                    item?.classList.add('open');
                     panel.style.maxHeight = panel.scrollHeight + 'px';
                     chevron.textContent = '▴';
+                }
+            });
+        });
+        accordion.querySelectorAll('[data-category-preview]').forEach((preview) => {
+            preview.addEventListener('click', () => {
+                const trigger = preview.previousElementSibling;
+                if (trigger && trigger.hasAttribute('data-acc-toggle') && !trigger.classList.contains('open')) {
+                    trigger.click();
                 }
             });
         });
@@ -163,6 +230,10 @@
     const cartCountEl = document.querySelector('[data-cart-count]');
     const cartKey = tableNumber ? `cart_{{ restaurant.slug }}_${tableNumber}` : null;
     const cartBar = document.querySelector('[data-cart-bar]');
+    const cartDetails = document.querySelector('[data-cart-details]');
+    const cartToggle = document.querySelector('[data-cart-toggle]');
+    const cartFab = document.querySelector('[data-cart-fab]');
+    const cartFabCount = document.querySelector('[data-cart-fab-count]');
 
     function getCart() {
         if (!cartKey) return [];
@@ -172,12 +243,89 @@
         if (!cartKey) return;
         localStorage.setItem(cartKey, JSON.stringify(items));
     }
-    function renderCartCount() {
-        if (!cartCountEl) return;
+    function updateCartToggleLabel() {
+        if (!cartToggle || !cartBar) return;
+        const collapsed = cartBar.classList.contains('collapsed');
+            cartToggle.textContent = collapsed ? "▲" : "▼";
+    }
+    function updateCartFab(count = 0) {
+        if (!cartFab || !cartBar) return;
+        if (cartFabCount) {
+            cartFabCount.textContent = count;
+        }
+        const collapsed = cartBar.classList.contains('collapsed');
+        if (collapsed) {
+            cartFab.classList.add('visible');
+        } else {
+            cartFab.classList.remove('visible');
+        }
+    }
+
+    function formatNumber(value) {
+        return Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function renderCart() {
         const items = getCart();
         const total = items.reduce((sum, item) => sum + (item.qty || 0), 0);
-        cartCountEl.textContent = total;
+        if (cartCountEl) {
+            cartCountEl.textContent = total;
+        }
+        if (cartDetails) {
+            if (!items.length) {
+                cartDetails.innerHTML = `<p class="muted">{{ t('cart_empty') if t('cart_empty') != 'cart_empty' else '' }}</p>`;
+            } else {
+                cartDetails.innerHTML = items
+                    .map(item => {
+                        const qty = item.qty || 0;
+                        const price = Number(item.price || 0);
+                        const lineTotal = qty * price;
+                        return `<div class="cart-line" data-cart-id="${item.id}">
+                            <div class="cart-line-info">
+                                <strong>${item.name || ''}</strong>
+                                <span>${qty} × ${formatNumber(price)} ${item.currency || ''} = ${formatNumber(lineTotal)} ${item.currency || ''}</span>
+                            </div>
+                            <div class="cart-line-controls">
+                                <button class="btn cart-ctrl-btn" type="button" data-cart-action="decrease" data-cart-id="${item.id}">-</button>
+                                <span class="cart-line-qty">${qty}</span>
+                                <button class="btn cart-ctrl-btn" type="button" data-cart-action="increase" data-cart-id="${item.id}">+</button>
+                                <button class="btn link cart-remove-btn" type="button" data-cart-action="remove" data-cart-id="${item.id}">{{ t('cart_remove') }}</button>
+                            </div>
+                        </div>`;
+                    })
+                    .join("");
+            }
+        }
+        if (cartBar) {
+            if (items.length) {
+                cartBar.classList.add('active');
+                cartBar.classList.remove('collapsed');
+            } else {
+                cartBar.classList.remove('active');
+                cartBar.classList.add('collapsed');
+            }
+            updateCartToggleLabel();
+        }
+        updateCartFab(total);
     }
+
+    if (cartToggle && cartBar) {
+        cartToggle.addEventListener('click', () => {
+            cartBar.classList.toggle('collapsed');
+            updateCartToggleLabel();
+            updateCartFab(getCart().reduce((sum, item) => sum + (item.qty || 0), 0));
+        });
+        updateCartToggleLabel();
+    }
+
+    if (cartFab && cartBar) {
+        cartFab.addEventListener('click', () => {
+            cartBar.classList.remove('collapsed');
+            cartBar.classList.add('active');
+            updateCartToggleLabel();
+            updateCartFab(getCart().reduce((sum, item) => sum + (item.qty || 0), 0));
+        });
+    }
+
     addButtons.forEach(btn => {
         btn.addEventListener('click', () => {
             if (!cartKey) return;
@@ -193,35 +341,122 @@
                 items.push({ id, name, price, currency, qty: 1 });
             }
             setCart(items);
-            renderCartCount();
+            renderCart();
+            updateCartToggleLabel();
             if (cartBar) cartBar.classList.add('active');
         });
     });
-    renderCartCount();
+    renderCart();
+
+    function adjustCartQuantity(id, delta) {
+        if (!cartKey) return;
+        const items = getCart();
+        const index = items.findIndex(item => item.id === id);
+        if (index === -1) return;
+        items[index].qty = Math.max(0, (items[index].qty || 0) + delta);
+        if (items[index].qty <= 0) {
+            items.splice(index, 1);
+        }
+        setCart(items);
+        renderCart();
+        updateCartToggleLabel();
+    }
+
+    function removeCartItem(id) {
+        if (!cartKey) return;
+        const items = getCart().filter(item => item.id !== id);
+        setCart(items);
+        renderCart();
+        updateCartToggleLabel();
+    }
+
+    if (cartDetails) {
+        cartDetails.addEventListener('click', (event) => {
+            const button = event.target.closest('[data-cart-action]');
+            if (!button) return;
+            const id = button.getAttribute('data-cart-id');
+            if (!id) return;
+            const action = button.getAttribute('data-cart-action');
+            if (action === 'increase') {
+                adjustCartQuantity(id, 1);
+            } else if (action === 'decrease') {
+                adjustCartQuantity(id, -1);
+            } else if (action === 'remove') {
+                removeCartItem(id);
+            }
+        });
+    }
+
+    const snackbar = document.querySelector('[data-snackbar]');
+    const showSnackbar = (message, variant='info') => {
+        if (!snackbar) return;
+        snackbar.textContent = message;
+        snackbar.className = `snackbar ${variant}`;
+        requestAnimationFrame(() => snackbar.classList.add('visible'));
+        setTimeout(() => {
+            snackbar.classList.remove('visible');
+        }, 3000);
+    };
 
     const callBtn = document.querySelector('[data-call-waiter]');
     if (callBtn) {
         callBtn.addEventListener('click', () => {
             if (!cartKey || !tableNumber) return;
             const items = getCart();
-            fetch('{{ url_for("api_call_waiter") }}', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    slug: "{{ restaurant.slug }}",
-                    table: tableNumber,
-                    items
-                })
-            }).then(res => {
-                if (res.ok) {
-                    if (cartBar) cartBar.classList.add('active');
-                    localStorage.removeItem(cartKey);
-                    renderCartCount();
-                    alert("{{ t('call_waiter_sent') }}");
-                } else {
-                    alert("{{ t('call_waiter_error') }}");
-                }
-            }).catch(() => alert("{{ t('call_waiter_error') }}"));
+            const totalValue = items.reduce((sum, item) => sum + (item.qty || 0) * Number(item.price || 0), 0);
+            const modal = document.createElement('div');
+            modal.className = 'modal-backdrop';
+            modal.innerHTML = `
+                <div class="modal">
+                    <h3>{{ t('confirm_call') if t('confirm_call') != 'confirm_call' else 'Confirm menu?' }}</h3>
+                    <div class="modal-list">
+                        ${(items || [])
+                            .map(item => {
+                                const qty = item.qty || 0;
+                                const price = Number(item.price || 0);
+                                const lineTotal = qty * price;
+                                return `<div class="modal-line">
+                                    <span>${item.name || ''} × ${qty}</span>
+                                    <strong>${lineTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${item.currency || ''}</strong>
+                                </div>`;
+                            })
+                            .join("")}
+                        <div class="modal-line modal-total">
+                            <span>{{ t('total') if t('total') != 'total' else 'Total' }}</span>
+                            <strong>${totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                        </div>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="btn" type="button" data-modal-cancel>{{ t('cancel') }}</button>
+                        <button class="btn primary" type="button" data-modal-confirm>{{ t('confirm') }}</button>
+                    </div>
+                </div>
+            `;
+        document.body.appendChild(modal);
+            const closeModal = () => modal.remove();
+            modal.querySelector('[data-modal-cancel]')?.addEventListener('click', closeModal);
+            modal.querySelector('[data-modal-confirm]')?.addEventListener('click', () => {
+                fetch('{{ url_for("api_call_waiter") }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        slug: "{{ restaurant.slug }}",
+                        table: tableNumber,
+                        items
+                    })
+                }).then(res => {
+                    if (res.ok) {
+                        if (cartBar) cartBar.classList.add('active');
+                        localStorage.removeItem(cartKey);
+                        renderCart();
+                        updateCartToggleLabel();
+                        showSnackbar("{{ t('call_waiter_sent') }}", 'success');
+                    } else {
+                        showSnackbar("{{ t('call_waiter_error') }}", 'error');
+                    }
+                }).catch(() => showSnackbar("{{ t('call_waiter_error') }}", 'error'))
+                .finally(closeModal);
+            });
         });
     }
 
@@ -230,7 +465,8 @@
         clearBtn.addEventListener('click', () => {
             if (!cartKey) return;
             localStorage.removeItem(cartKey);
-            renderCartCount();
+            renderCart();
+            updateCartToggleLabel();
         });
     }
 

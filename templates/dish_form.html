@@ -14,6 +14,8 @@
             {{ form.price(class="input") }}
         </label>
         <label class="checkbox">{{ form.available() }} <span>{{ t('available') }}</span></label>
+        <label class="checkbox">{{ form.is_spicy() }} <span>{{ t('spicy') }}</span></label>
+        <label class="checkbox">{{ form.is_vegan() }} <span>{{ t('vegan') }}</span></label>
         <label>{{ t('currency') }}</label>
         {{ form.currency(class="input") }}
         <label>{{ t('logo') }}</label>

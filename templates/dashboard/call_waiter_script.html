@@ -1,0 +1,168 @@
+<script>
+(function() {
+    const historyContainer = document.querySelector('[data-requests-container]');
+    const newContainer = document.querySelector('[data-new-requests]');
+    if (!historyContainer && !newContainer) return;
+
+    const deliveredLabel = "{{ t('mark_delivered') }}";
+    const canceledLabel = "{{ t('mark_canceled') }}";
+    const newRequestLabel = "{{ t('new_request_alert') }}";
+    const statusLabels = {{ status_labels|tojson }};
+    const knownNewRequests = new Set(({{ new_requests|tojson }} || []).map(r => r.id));
+
+    const toastContainer = document.querySelector('[data-toast-container]');
+
+    let audioCtx;
+    const playSound = () => {
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            audioCtx = audioCtx || new Ctx();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = 880;
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+            gain.gain.setValueAtTime(0.0001, now);
+            gain.gain.exponentialRampToValueAtTime(0.2, now + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+            osc.start(now);
+            osc.stop(now + 0.35);
+        } catch (err) {
+            console.warn('Audio alert unavailable', err);
+        }
+    };
+
+    const showToast = (message, status, playAudio = false) => {
+        if (!toastContainer) return;
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${status}`;
+        toast.innerHTML = `<span>${message}</span><button class="toast-close" type="button">&times;</button>`;
+        toastContainer.appendChild(toast);
+        requestAnimationFrame(() => toast.classList.add('visible'));
+        const closeBtn = toast.querySelector('.toast-close');
+        closeBtn?.addEventListener('click', () => {
+            toast.classList.remove('visible');
+            setTimeout(() => toast.remove(), 300);
+        });
+        if (playAudio) {
+            playSound();
+        }
+    };
+
+    const updateStatus = async (id, status) => {
+        try {
+            await fetch(`{{ url_for('api_update_request_status', req_id=0) }}`.replace('0', id), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status })
+            });
+            showToast(status === 'delivered' ? "{{ t('status_delivered') }}" : "{{ t('status_canceled') }}", status);
+            poll();
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    const renderList = (target, requests) => {
+        const readOnly = target.dataset.readonly === 'true';
+        const excludeStatuses = (target.dataset.excludeStatus || '')
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean);
+        let list = requests;
+        if (excludeStatuses.length) {
+            list = list.filter(req => !excludeStatuses.includes(req.status));
+        }
+        target.innerHTML = '';
+        if (!list.length) {
+            target.innerHTML = `<p class="muted">{{ t('no_requests') if t('no_requests') != 'no_requests' else '' }}</p>`;
+            return;
+        }
+        list.forEach(req => {
+            const div = document.createElement('div');
+            div.className = 'dish-card';
+            const itemsHtml = (req.items || []).map(item => {
+                return `<li>${item.name || ''} ×${item.qty || 1} (${item.price || ''} ${item.currency || ''})</li>`;
+            }).join('');
+            const statusText = readOnly && req.status === 'new' ? '' : (statusLabels[req.status] || '');
+            div.innerHTML = `
+                <div class="dish-head">
+                    <div>
+                        <h4>${req.restaurant || ''}</h4>
+                        <span class="badge inline">{{ t('table_label') }} ${req.table_number}</span>
+                    </div>
+                    <span class="muted">${req.created_at}</span>
+                </div>
+                ${statusText ? `<p class="muted">${statusText}</p>` : ''}
+                ${itemsHtml ? `<ul class="bullet-list">${itemsHtml}</ul>` : `<p class="muted">{{ t('call_waiter') }}</p>`}
+                ${
+                    readOnly
+                        ? ''
+                        : `<div class="card-actions">
+                            <button class="btn" data-status-action="delivered" data-id="${req.id}">${deliveredLabel}</button>
+                            <button class="btn" data-status-action="canceled" data-id="${req.id}">${canceledLabel}</button>
+                        </div>`
+                }
+            `;
+            target.appendChild(div);
+        });
+    };
+
+    const bindActions = (target) => {
+        if (target.dataset.readonly === 'true') {
+            return;
+        }
+        target.querySelectorAll('[data-status-action]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = btn.getAttribute('data-id');
+                const action = btn.getAttribute('data-status-action');
+                updateStatus(id, action === 'delivered' ? 'delivered' : 'canceled');
+            });
+        });
+    };
+
+    const initial = {{ requests|tojson }};
+    const initialNew = {{ new_requests|tojson }};
+    if (historyContainer) {
+        renderList(historyContainer, initial || []);
+        bindActions(historyContainer);
+    }
+    if (newContainer) {
+        renderList(newContainer, initialNew || []);
+        bindActions(newContainer);
+    }
+
+    const poll = async () => {
+        try {
+            const res = await fetch('{{ url_for("api_my_call_requests") }}');
+            if (!res.ok) return;
+            const data = await res.json();
+            const allRequests = data.requests || [];
+            allRequests
+                .filter(r => r.status === 'new')
+                .forEach(r => {
+                    if (!knownNewRequests.has(r.id)) {
+                        knownNewRequests.add(r.id);
+                        showToast(`${newRequestLabel}: ${r.restaurant || ''} · {{ t('table_label') }} ${r.table_number}`, 'new', true);
+                    }
+                });
+            if (historyContainer) {
+                renderList(historyContainer, allRequests);
+                bindActions(historyContainer);
+            }
+            if (newContainer) {
+                renderList(newContainer, allRequests.filter(r => r.status === 'new'));
+                bindActions(newContainer);
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setTimeout(poll, 10000);
+        }
+    };
+    poll();
+})();
+</script>

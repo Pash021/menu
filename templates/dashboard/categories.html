@@ -1,0 +1,32 @@
+<section class="dashboard-section" id="categories">
+    <div class="section-header">
+        <div>
+            <p class="muted">{{ t('my_restaurants') }}</p>
+            <h2>{{ t('categories') }}</h2>
+        </div>
+    </div>
+    <div class="mini-grid">
+        {% for restaurant in restaurants %}
+        {% set translated_name = restaurant.translated_name(lang) %}
+        {% set categories = categories_by_rest.get(restaurant.id, []) %}
+        <article class="mini-card">
+            <header class="mini-card-header">
+                <div>
+                    <h3>{{ translated_name }}</h3>
+                    <p class="muted">{{ t('categories') }}</p>
+                </div>
+                <a href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}" class="link">{{ t('manage') }}</a>
+            </header>
+            {% if categories %}
+            <ul class="pill-list">
+                {% for category in categories %}
+                <li>{{ category.translated_name(lang) }}</li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="muted">{{ t('no_categories') }}</p>
+            {% endif %}
+        </article>
+        {% endfor %}
+    </div>
+</section>

@@ -1,0 +1,11 @@
+<section id="call-waiter" class="card dashboard-section">
+    <div class="card-header">
+        <div>
+            <h2>{{ t('call_waiter') }}</h2>
+            <p class="muted">{{ t('table_label') }}</p>
+        </div>
+    </div>
+    <div class="dish-grid" data-new-requests>
+        <p class="muted">{{ t('no_requests') if t('no_requests') != 'no_requests' else '' }}</p>
+    </div>
+</section>

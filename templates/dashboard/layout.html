@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="dashboard-shell">
+    {% include 'dashboard/sidebar.html' %}
+    <section class="dashboard-main">
+        {% block panel %}{% endblock %}
+    </section>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}{% endblock %}

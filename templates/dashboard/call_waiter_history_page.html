@@ -1,0 +1,9 @@
+{% extends 'dashboard/layout.html' %}
+{% block panel %}
+{% include 'dashboard/call_waiter_history.html' %}
+{% endblock %}
+
+{% block extra_scripts %}
+{{ super() }}
+{% include 'dashboard/call_waiter_script.html' %}
+{% endblock %}

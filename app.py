@@ -41,6 +41,8 @@ from flask_login import (
     logout_user,
 )
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from flask_wtf import FlaskForm
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -134,7 +136,8 @@ CURRENCY_SYMBOLS = {
     "GBP": "£",
 }
 
-REQUEST_STATUS = ("new", "seen")
+REQUEST_STATUS = ("new", "seen", "delivered", "canceled")
+REQUEST_STATUS_SET = set(REQUEST_STATUS)
 
 UI_TRANSLATIONS = {
     "ru": {
@@ -195,6 +198,8 @@ UI_TRANSLATIONS = {
         "logged_out": "Вы вышли из аккаунта",
         "restaurant_created": "Ресторан создан",
         "restaurant_updated": "Ресторан обновлен",
+        "restaurant_deleted": "Ресторан удален",
+        "restaurant_delete_failed": "Не удалось удалить ресторан",
         "category_added": "Категория добавлена",
         "category_updated": "Категория обновлена",
         "category_deleted": "Категория удалена",
@@ -213,12 +218,37 @@ UI_TRANSLATIONS = {
         "table_added": "Стол добавлен",
         "table_deleted": "Стол удален",
         "table_exists": "Такой номер уже есть",
+        "table_occupied": "Занято",
+        "table_free": "Свободно",
+        "mark_occupied": "Отметить занятым",
+        "mark_free": "Освободить",
+        "table_marked_occupied": "Стол отмечен занятым",
+        "table_marked_free": "Стол отмечен свободным",
         "no_tables": "Столы не добавлены",
+        "no_categories": "Категории еще не добавлены",
         "add_to_cart": "Добавить",
         "call_waiter": "Позвать официанта",
         "table_label": "Стол",
         "cart_items": "товаров",
         "clear_cart": "Очистить",
+        "cart_empty": "Пока ничего не выбрано",
+        "cart_hide": "Скрыть",
+        "cart_show": "Показать",
+        "spicy": "Острое",
+        "vegan": "Веганское",
+        "cart_remove": "Удалить",
+        "cart_increase": "Больше",
+        "cart_decrease": "Меньше",
+        "new_request_alert": "Новый вызов",
+        "confirm_call": "Подтвердите меню",
+        "confirm_call_desc": "Отправить заказ официанту?",
+        "history": "История",
+        "mark_delivered": "Доставлено",
+        "mark_canceled": "Отменено",
+        "status_new": "Новое",
+        "status_seen": "Просмотрено",
+        "status_delivered": "Доставлено",
+        "status_canceled": "Отменено",
         "no_requests": "Пока нет вызовов",
         "new": "Новое",
         "call_waiter_sent": "Вызов отправлен",
@@ -282,6 +312,8 @@ UI_TRANSLATIONS = {
         "logged_out": "You have logged out",
         "restaurant_created": "Restaurant created",
         "restaurant_updated": "Restaurant updated",
+        "restaurant_deleted": "Restaurant deleted",
+        "restaurant_delete_failed": "Failed to delete restaurant",
         "category_added": "Category added",
         "category_updated": "Category updated",
         "category_deleted": "Category deleted",
@@ -300,12 +332,37 @@ UI_TRANSLATIONS = {
         "table_added": "Table added",
         "table_deleted": "Table deleted",
         "table_exists": "This number already exists",
+        "table_occupied": "Occupied",
+        "table_free": "Free",
+        "mark_occupied": "Mark occupied",
+        "mark_free": "Mark free",
+        "table_marked_occupied": "Table marked occupied",
+        "table_marked_free": "Table marked free",
         "no_tables": "No tables yet",
+        "no_categories": "No categories yet",
         "add_to_cart": "Add",
         "call_waiter": "Call waiter",
         "table_label": "Table",
         "cart_items": "items",
         "clear_cart": "Clear",
+        "cart_empty": "No items yet",
+        "cart_hide": "Hide",
+        "cart_show": "Show",
+        "spicy": "Spicy",
+        "vegan": "Vegan",
+        "cart_remove": "Remove",
+        "cart_increase": "More",
+        "cart_decrease": "Less",
+        "new_request_alert": "New request",
+        "confirm_call": "Confirm menu",
+        "confirm_call_desc": "Send the order to the waiter?",
+        "history": "History",
+        "mark_delivered": "Mark delivered",
+        "mark_canceled": "Mark canceled",
+        "status_new": "New",
+        "status_seen": "Seen",
+        "status_delivered": "Delivered",
+        "status_canceled": "Canceled",
         "no_requests": "No requests yet",
         "new": "New",
         "call_waiter_sent": "Request sent",
@@ -369,6 +426,8 @@ UI_TRANSLATIONS = {
         "logged_out": "Դուրս եկաք հաշվից",
         "restaurant_created": "Ռեստորանը ստեղծվեց",
         "restaurant_updated": "Ռեստորանը թարմացվեց",
+        "restaurant_deleted": "Ռեստորանը ջնջվեց",
+        "restaurant_delete_failed": "Չհաջողվեց ջնջել ռեստորանը",
         "category_added": "Կատեգորիան ավելացվեց",
         "category_updated": "Կատեգորիան թարմացվեց",
         "category_deleted": "Կատեգորիան ջնջվեց",
@@ -387,12 +446,37 @@ UI_TRANSLATIONS = {
         "table_added": "Սեղանը ավելացվեց",
         "table_deleted": "Սեղանը ջնջվեց",
         "table_exists": "Այդ համարը արդեն կա",
+        "table_occupied": "Զբաղված",
+        "table_free": "Ազատ",
+        "mark_occupied": "Նշել զբաղված",
+        "mark_free": "Նշել ազատ",
+        "table_marked_occupied": "Սեղանը նշվեց զբաղված",
+        "table_marked_free": "Սեղանը նշվեց ազատ",
         "no_tables": "Սեղաններ չկան",
+        "no_categories": "Կատեգորիաներ դեռ չկան",
         "add_to_cart": "Ավելացնել",
-        "call_waiter": "Կանչել մատուցողին",
+        "call_waiter": "Գրանցել պատվեր",
         "table_label": "Սեղան",
         "cart_items": "պատվեր",
         "clear_cart": "Մաքրել",
+        "cart_empty": "Դեռ բան չի ընտրվել",
+        "cart_hide": "Թաքցնել",
+        "cart_show": "Ցույց տալ",
+        "spicy": "Կծու",
+        "vegan": "Վեգան",
+        "cart_remove": "Հեռացնել",
+        "cart_increase": "Ավելացնել",
+        "cart_decrease": "Նվազեցնել",
+        "new_request_alert": "Նոր կանչ",
+        "confirm_call": "Հաստատե՞լ մենյուն",
+        "confirm_call_desc": "Ուղարկե՞լ պատվերը մատուցողին:",
+        "history": "Պատմություն",
+        "mark_delivered": "Մատուցված է",
+        "mark_canceled": "Չեղարկված",
+        "status_new": "Նոր",
+        "status_seen": "Դիտված",
+        "status_delivered": "Մատուցված",
+        "status_canceled": "Չեղարկված",
         "no_requests": "Դեռ կանչեր չկան",
         "new": "Նոր",
         "call_waiter_sent": "Կանչը ուղարկվեց",
@@ -456,6 +540,8 @@ UI_TRANSLATIONS = {
         "logged_out": "تم تسجيل الخروج",
         "restaurant_created": "تم إنشاء المطعم",
         "restaurant_updated": "تم تحديث المطعم",
+        "restaurant_deleted": "تم حذف المطعم",
+        "restaurant_delete_failed": "تعذر حذف المطعم",
         "category_added": "تمت إضافة الفئة",
         "category_updated": "تم تحديث الفئة",
         "category_deleted": "تم حذف الفئة",
@@ -474,11 +560,36 @@ UI_TRANSLATIONS = {
         "table_added": "تمت إضافة الطاولة",
         "table_deleted": "تم حذف الطاولة",
         "table_exists": "هذا الرقم موجود بالفعل",
+        "table_occupied": "مشغولة",
+        "table_free": "متاحة",
+        "mark_occupied": "وضع كـ مشغولة",
+        "mark_free": "وضع كـ متاحة",
+        "table_marked_occupied": "تم وضع الطاولة كـ مشغولة",
+        "table_marked_free": "تم وضع الطاولة كـ متاحة",
         "no_tables": "لا توجد طاولات بعد",
+        "no_categories": "لا توجد فئات بعد",
         "add_to_cart": "إضافة",
         "call_waiter": "نداء النادل",
         "table_label": "طاولة",
         "cart_items": "عناصر",
+        "clear_cart": "تنظيف",
+        "cart_empty": "لا عناصر مختارة بعد",
+        "cart_hide": "إخفاء",
+        "cart_show": "إظهار",
+        "spicy": "حار",
+        "vegan": "نباتي",
+        "cart_remove": "إزالة",
+        "cart_increase": "زيادة",
+        "cart_decrease": "تقليل",
+        "new_request_alert": "طلب جديد",
+        "confirm_call": "تأكيد القائمة؟",
+        "history": "السجل",
+        "mark_delivered": "تم التوصيل",
+        "mark_canceled": "تم الإلغاء",
+        "status_new": "جديد",
+        "status_seen": "تمت رؤيته",
+        "status_delivered": "تم التوصيل",
+        "status_canceled": "تم الإلغاء",
     },
     "es": {
         "login": "Iniciar sesión",
@@ -538,6 +649,8 @@ UI_TRANSLATIONS = {
         "logged_out": "Has cerrado sesión",
         "restaurant_created": "Restaurante creado",
         "restaurant_updated": "Restaurante actualizado",
+        "restaurant_deleted": "Restaurante eliminado",
+        "restaurant_delete_failed": "No se pudo eliminar el restaurante",
         "category_added": "Categoría añadida",
         "category_updated": "Categoría actualizada",
         "category_deleted": "Categoría eliminada",
@@ -556,11 +669,36 @@ UI_TRANSLATIONS = {
         "table_added": "Mesa agregada",
         "table_deleted": "Mesa eliminada",
         "table_exists": "Ese número ya existe",
+        "table_occupied": "Ocupada",
+        "table_free": "Libre",
+        "mark_occupied": "Marcar ocupada",
+        "mark_free": "Marcar libre",
+        "table_marked_occupied": "Mesa marcada ocupada",
+        "table_marked_free": "Mesa marcada libre",
         "no_tables": "Aún no hay mesas",
+        "no_categories": "Aún no hay categorías",
         "add_to_cart": "Añadir",
         "call_waiter": "Llamar al camarero",
         "table_label": "Mesa",
         "cart_items": "artículos",
+        "clear_cart": "Vaciar",
+        "cart_empty": "Aún no hay artículos",
+        "cart_hide": "Ocultar",
+        "cart_show": "Mostrar",
+        "spicy": "Picante",
+        "vegan": "Vegano",
+        "cart_remove": "Eliminar",
+        "cart_increase": "Más",
+        "cart_decrease": "Menos",
+        "new_request_alert": "Nueva solicitud",
+        "confirm_call": "¿Confirmar el menú?",
+        "history": "Historial",
+        "mark_delivered": "Marcar entregado",
+        "mark_canceled": "Marcar cancelado",
+        "status_new": "Nuevo",
+        "status_seen": "Visto",
+        "status_delivered": "Entregado",
+        "status_canceled": "Cancelado",
     },
     "de": {
         "login": "Anmelden",
@@ -620,6 +758,8 @@ UI_TRANSLATIONS = {
         "logged_out": "Abgemeldet",
         "restaurant_created": "Restaurant erstellt",
         "restaurant_updated": "Restaurant aktualisiert",
+        "restaurant_deleted": "Restaurant gelöscht",
+        "restaurant_delete_failed": "Restaurant konnte nicht gelöscht werden",
         "category_added": "Kategorie hinzugefügt",
         "category_updated": "Kategorie aktualisiert",
         "category_deleted": "Kategorie gelöscht",
@@ -638,11 +778,33 @@ UI_TRANSLATIONS = {
         "table_added": "Tisch hinzugefügt",
         "table_deleted": "Tisch gelöscht",
         "table_exists": "Diese Nummer existiert bereits",
+        "table_occupied": "Belegt",
+        "table_free": "Frei",
+        "mark_occupied": "Als belegt markieren",
+        "mark_free": "Als frei markieren",
+        "table_marked_occupied": "Tisch als belegt markiert",
+        "table_marked_free": "Tisch als frei markiert",
         "no_tables": "Noch keine Tische",
+        "no_categories": "Noch keine Kategorien",
         "add_to_cart": "Hinzufügen",
         "call_waiter": "Kellner rufen",
         "table_label": "Tisch",
         "cart_items": "Artikel",
+        "clear_cart": "Leeren",
+        "cart_empty": "Noch keine Artikel ausgewählt",
+        "spicy": "Scharf",
+        "vegan": "Vegan",
+        "cart_remove": "Entfernen",
+        "cart_increase": "Mehr",
+        "cart_decrease": "Weniger",
+        "confirm_call": "Menü bestätigen?",
+        "history": "Verlauf",
+        "mark_delivered": "Als geliefert markieren",
+        "mark_canceled": "Als storniert markieren",
+        "status_new": "Neu",
+        "status_seen": "Gesehen",
+        "status_delivered": "Geliefert",
+        "status_canceled": "Storniert",
     },
     "hi": {
         "login": "लॉगिन",
@@ -702,6 +864,8 @@ UI_TRANSLATIONS = {
         "logged_out": "आप लॉगआउट हो गए",
         "restaurant_created": "रेस्टोरेंट बनाया गया",
         "restaurant_updated": "रेस्टोरेंट अपडेट हुआ",
+        "restaurant_deleted": "रेस्टोरेंट हटाया गया",
+        "restaurant_delete_failed": "रेस्टोरेंट हटाया नहीं जा सका",
         "category_added": "श्रेणी जोड़ी गई",
         "category_updated": "श्रेणी अपडेट हुई",
         "category_deleted": "श्रेणी हटाई गई",
@@ -720,11 +884,33 @@ UI_TRANSLATIONS = {
         "table_added": "टेबल जोड़ी गई",
         "table_deleted": "टेबल हटाई गई",
         "table_exists": "यह नंबर पहले से है",
+        "table_occupied": "व्यस्त",
+        "table_free": "खाली",
+        "mark_occupied": "व्यस्त चिन्हित करें",
+        "mark_free": "खाली चिन्हित करें",
+        "table_marked_occupied": "टेबल को व्यस्त किया गया",
+        "table_marked_free": "टेबल को खाली किया गया",
         "no_tables": "अभी कोई टेबल नहीं है",
+        "no_categories": "अभी कैटेगरी नहीं हैं",
         "add_to_cart": "जोड़ें",
         "call_waiter": "वेटर बुलाएँ",
         "table_label": "टेबल",
         "cart_items": "आइटम",
+        "clear_cart": "खाली करें",
+        "cart_empty": "अभी कुछ नहीं चुना",
+        "spicy": "मसालेदार",
+        "vegan": "वीगन",
+        "cart_remove": "हटाएं",
+        "cart_increase": "बढ़ाएं",
+        "cart_decrease": "घटाएं",
+        "confirm_call": "मेनू की पुष्टि करें?",
+        "history": "इतिहास",
+        "mark_delivered": "डिलीवर मार्क करें",
+        "mark_canceled": "रद्द मार्क करें",
+        "status_new": "नया",
+        "status_seen": "देखा गया",
+        "status_delivered": "डिलीवर",
+        "status_canceled": "रद्द",
     },
 }
 # Database configuration (MySQL by default; override via env)
@@ -832,6 +1018,8 @@ class Dish(db.Model):
     description = db.Column(db.Text, nullable=True)
     price = db.Column(db.Numeric(10, 2), nullable=False)
     available = db.Column(db.Boolean, default=True)
+    is_spicy = db.Column(db.Boolean, default=False)
+    is_vegan = db.Column(db.Boolean, default=False)
     image_filename = db.Column(db.String(255), nullable=True)
     currency = db.Column(db.String(8), nullable=False, default="AMD")
     name_translations = db.Column(db.JSON, default=dict)
@@ -867,6 +1055,7 @@ class DiningTable(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     number = db.Column(db.Integer, nullable=False)
     restaurant_id = db.Column(db.Integer, db.ForeignKey("restaurant.id"), nullable=False)
+    is_occupied = db.Column(db.Boolean, default=False)
 
     __table_args__ = (db.UniqueConstraint("restaurant_id", "number", name="uq_table_number_per_restaurant"),)
 
@@ -878,7 +1067,9 @@ class CallRequest(db.Model):
     items = db.Column(db.JSON, default=list)
     status = db.Column(db.String(20), default="new")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    restaurant = db.relationship("Restaurant", backref="call_requests")
+    restaurant = db.relationship(
+        "Restaurant", backref=db.backref("call_requests", cascade="all, delete-orphan")
+    )
 
     def as_dict(self):
         lang = getattr(g, "lang", DEFAULT_LANG)
@@ -891,6 +1082,23 @@ class CallRequest(db.Model):
             "status": self.status,
             "created_at": self.created_at.isoformat(),
         }
+
+
+def ensure_table_occupancy_column() -> None:
+    """Ensure legacy DBs have the is_occupied column on both possible table names."""
+    try:
+        with app.app_context():
+            for tbl_name in ("restaurant_tables", "table"):
+                try:
+                    db.session.execute(text(f"ALTER TABLE `{tbl_name}` ADD COLUMN is_occupied TINYINT(1) NOT NULL DEFAULT 0"))
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+    except Exception:
+        pass
+
+
+ensure_table_occupancy_column()
 
 
 @login_manager.user_loader
@@ -950,6 +1158,14 @@ def is_admin_user(user: User | None) -> bool:
     return False
 
 
+def has_restaurant_access(restaurant: Restaurant | None) -> bool:
+    if not restaurant:
+        return False
+    if current_user.is_authenticated and is_admin_user(current_user):
+        return True
+    return restaurant.owner == current_user
+
+
 def translate_text(text: str, target_lang: str) -> str | None:
     if not text or not translator_type:
         return None
@@ -991,6 +1207,33 @@ def admin_required(func):
 def flash_t(key: str, category: str = "info"):
     lang = getattr(g, "lang", DEFAULT_LANG)
     flash(translate_ui(key, lang), category)
+
+
+def get_user_restaurants(user: User) -> list[Restaurant]:
+    return Restaurant.query.filter_by(user_id=user.id).all()
+
+
+def build_restaurant_collections(restaurants: list[Restaurant]) -> tuple[dict[int, list[Category]], dict[int, list[DiningTable]]]:
+    categories_by_rest: dict[int, list[Category]] = {}
+    tables_by_rest: dict[int, list[DiningTable]] = {}
+    restaurant_ids = [r.id for r in restaurants]
+    if not restaurant_ids:
+        return categories_by_rest, tables_by_rest
+    categories = (
+        Category.query.filter(Category.restaurant_id.in_(restaurant_ids))
+        .order_by(Category.restaurant_id, Category.sort_order, Category.name)
+        .all()
+    )
+    for category in categories:
+        categories_by_rest.setdefault(category.restaurant_id, []).append(category)
+    tables = (
+        DiningTable.query.filter(DiningTable.restaurant_id.in_(restaurant_ids))
+        .order_by(DiningTable.restaurant_id, DiningTable.number)
+        .all()
+    )
+    for table in tables:
+        tables_by_rest.setdefault(table.restaurant_id, []).append(table)
+    return categories_by_rest, tables_by_rest
 
 
 def populate_translations_for_category(category: Category):
@@ -1132,6 +1375,8 @@ class DishForm(FlaskForm):
     description = TextAreaField("Описание", validators=[Length(max=1000)])
     price = DecimalField("Цена", validators=[DataRequired(), NumberRange(min=0)], places=2)
     available = BooleanField("В наличии", default=True)
+    is_spicy = BooleanField("Острое")
+    is_vegan = BooleanField("Веганское")
     currency = SelectField(
         "Валюта",
         choices=[("AMD", "AMD ֏"), ("USD", "USD $"), ("EUR", "EUR €"), ("RUB", "RUB ₽"), ("GBP", "GBP £")],
@@ -1205,7 +1450,18 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    restaurants = Restaurant.query.filter_by(user_id=current_user.id).all()
+    restaurants = get_user_restaurants(current_user)
+    return render_template(
+        "dashboard/restaurants_page.html",
+        restaurants=restaurants,
+        active_page="restaurants",
+        body_class="dashboard-page",
+    )
+
+
+@app.route("/dashboard/call-waiter")
+@login_required
+def dashboard_call_waiter():
     requests = (
         CallRequest.query.join(Restaurant)
         .filter(Restaurant.user_id == current_user.id)
@@ -1214,7 +1470,81 @@ def dashboard():
         .all()
     )
     requests_data = [r.as_dict() for r in requests]
-    return render_template("dashboard.html", restaurants=restaurants, requests=requests_data)
+    new_requests_data = [r for r in requests_data if r.get("status") == "new"]
+    lang = getattr(g, "lang", DEFAULT_LANG)
+    status_labels = {
+        "new": translate_ui("status_new", lang),
+        "seen": translate_ui("status_seen", lang),
+        "delivered": translate_ui("status_delivered", lang),
+        "canceled": translate_ui("status_canceled", lang),
+    }
+    return render_template(
+        "dashboard/call_waiter_page.html",
+        requests=requests_data,
+        new_requests=new_requests_data,
+        status_labels=status_labels,
+        active_page="call_waiter",
+        body_class="dashboard-page",
+    )
+
+
+@app.route("/dashboard/call-waiter/history")
+@login_required
+def dashboard_call_waiter_history():
+    requests = (
+        CallRequest.query.join(Restaurant)
+        .filter(Restaurant.user_id == current_user.id)
+        .order_by(CallRequest.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    requests_data = [r.as_dict() for r in requests]
+    lang = getattr(g, "lang", DEFAULT_LANG)
+    status_labels = {
+        "new": translate_ui("status_new", lang),
+        "seen": translate_ui("status_seen", lang),
+        "delivered": translate_ui("status_delivered", lang),
+        "canceled": translate_ui("status_canceled", lang),
+    }
+    new_requests_data = [r for r in requests_data if r.get("status") == "new"]
+    return render_template(
+        "dashboard/call_waiter_history_page.html",
+        requests=requests_data,
+        new_requests=new_requests_data,
+        status_labels=status_labels,
+        active_page="call_waiter_history",
+        body_class="dashboard-page",
+    )
+
+
+@app.route("/dashboard/categories")
+@login_required
+def dashboard_categories():
+    restaurants = get_user_restaurants(current_user)
+    categories_by_rest, tables_by_rest = build_restaurant_collections(restaurants)
+    return render_template(
+        "dashboard/categories_page.html",
+        restaurants=restaurants,
+        categories_by_rest=categories_by_rest,
+        tables_by_rest=tables_by_rest,
+        active_page="categories",
+        body_class="dashboard-page",
+    )
+
+
+@app.route("/dashboard/tables")
+@login_required
+def dashboard_tables():
+    restaurants = get_user_restaurants(current_user)
+    categories_by_rest, tables_by_rest = build_restaurant_collections(restaurants)
+    return render_template(
+        "dashboard/tables_page.html",
+        restaurants=restaurants,
+        categories_by_rest=categories_by_rest,
+        tables_by_rest=tables_by_rest,
+        active_page="tables",
+        body_class="dashboard-page",
+    )
 
 
 @app.route("/api/my/call_requests")
@@ -1234,9 +1564,24 @@ def api_my_call_requests():
 @login_required
 def api_mark_request_seen(req_id: int):
     req = db.session.get(CallRequest, req_id)
-    if not req or req.restaurant.owner != current_user:
+    if not req or not has_restaurant_access(req.restaurant):
         abort(404)
     req.status = "seen"
+    db.session.commit()
+    return {"status": "ok"}
+
+
+@app.route("/api/call_requests/<int:req_id>/status", methods=["POST"])
+@login_required
+def api_update_request_status(req_id: int):
+    req = db.session.get(CallRequest, req_id)
+    if not req or not has_restaurant_access(req.restaurant):
+        abort(404)
+    data = request.get_json(silent=True) or {}
+    status = data.get("status")
+    if status not in REQUEST_STATUS_SET:
+        abort(400)
+    req.status = status
     db.session.commit()
     return {"status": "ok"}
 
@@ -1246,11 +1591,10 @@ def api_mark_request_seen(req_id: int):
 @admin_required
 def admin_users():
     users = User.query.order_by(User.email).all()
-    # Preload restaurant counts per user
-    counts = {u.id: 0 for u in users}
-    for r in Restaurant.query.with_entities(Restaurant.user_id).all():
-        counts[r.user_id] = counts.get(r.user_id, 0) + 1
-    return render_template("admin_users.html", users=users, counts=counts)
+    restaurants_by_user: dict[int, list[Restaurant]] = {}
+    for r in Restaurant.query.order_by(Restaurant.user_id, Restaurant.name).all():
+        restaurants_by_user.setdefault(r.user_id, []).append(r)
+    return render_template("admin_users.html", users=users, restaurants_by_user=restaurants_by_user)
 
 
 @app.route("/admin/restaurants")
@@ -1259,6 +1603,37 @@ def admin_users():
 def admin_restaurants():
     restaurants = Restaurant.query.order_by(Restaurant.name).all()
     return render_template("admin_restaurants.html", restaurants=restaurants)
+
+
+@app.route("/admin/restaurants/<int:restaurant_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_delete_restaurant(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant:
+        abort(404)
+    try:
+        # Hard-delete dependent rows to satisfy strict FK constraints in MySQL
+        db.session.execute(text("DELETE FROM `call_request` WHERE restaurant_id = :rid"), {"rid": restaurant.id})
+        db.session.execute(
+            text(
+                "DELETE d FROM `dish` d "
+                "JOIN `category` c ON d.category_id = c.id "
+                "WHERE c.restaurant_id = :rid"
+            ),
+            {"rid": restaurant.id},
+        )
+        db.session.execute(text("DELETE FROM `category` WHERE restaurant_id = :rid"), {"rid": restaurant.id})
+        # Some legacy DBs use `table`; current models use `restaurant_tables`
+        db.session.execute(text("DELETE FROM `table` WHERE restaurant_id = :rid"), {"rid": restaurant.id})
+        db.session.execute(text("DELETE FROM `restaurant_tables` WHERE restaurant_id = :rid"), {"rid": restaurant.id})
+        db.session.delete(restaurant)
+        db.session.commit()
+        flash_t("restaurant_deleted", "info")
+    except IntegrityError:
+        db.session.rollback()
+        flash_t("restaurant_delete_failed", "danger")
+    return redirect(request.referrer or url_for("admin_users"))
 
 
 @app.route("/restaurants/new", methods=["GET", "POST"])
@@ -1289,7 +1664,7 @@ def create_restaurant():
 
 def require_restaurant_owned(restaurant_id: int) -> Restaurant:
     restaurant = db.session.get(Restaurant, restaurant_id)
-    if not restaurant or restaurant.owner != current_user:
+    if not has_restaurant_access(restaurant):
         abort(404)
     return restaurant
 
@@ -1334,9 +1709,7 @@ def edit_restaurant(restaurant_id: int):
 @login_required
 def manage_restaurant(restaurant_id: int):
     restaurant = require_restaurant_owned(restaurant_id)
-    categories = (
-        Category.query.filter_by(restaurant_id=restaurant.id).order_by(Category.sort_order, Category.name).all()
-    )
+    categories = Category.query.filter_by(restaurant_id=restaurant.id).order_by(Category.name.asc()).all()
     tables = DiningTable.query.filter_by(restaurant_id=restaurant.id).order_by(DiningTable.number).all()
     return render_template("restaurant_manage.html", restaurant=restaurant, categories=categories, tables=tables)
 
@@ -1360,7 +1733,7 @@ def create_category(restaurant_id: int):
 @login_required
 def edit_category(category_id: int):
     category = db.session.get(Category, category_id)
-    if not category or category.restaurant.owner != current_user:
+    if not category or not has_restaurant_access(category.restaurant):
         abort(404)
     form = CategoryForm(obj=category)
     if form.validate_on_submit():
@@ -1377,7 +1750,7 @@ def edit_category(category_id: int):
 @login_required
 def delete_category(category_id: int):
     category = db.session.get(Category, category_id)
-    if not category or category.restaurant.owner != current_user:
+    if not category or not has_restaurant_access(category.restaurant):
         abort(404)
     restaurant_id = category.restaurant.id
     db.session.delete(category)
@@ -1390,7 +1763,7 @@ def delete_category(category_id: int):
 @login_required
 def create_dish(category_id: int):
     category = db.session.get(Category, category_id)
-    if not category or category.restaurant.owner != current_user:
+    if not category or not has_restaurant_access(category.restaurant):
         abort(404)
     form = DishForm()
     if form.validate_on_submit():
@@ -1400,6 +1773,8 @@ def create_dish(category_id: int):
             description=form.description.data,
             price=form.price.data,
             available=form.available.data,
+            is_spicy=form.is_spicy.data,
+            is_vegan=form.is_vegan.data,
             currency=form.currency.data,
             image_filename=image_filename,
             category=category,
@@ -1416,7 +1791,7 @@ def create_dish(category_id: int):
 @login_required
 def edit_dish(dish_id: int):
     dish = db.session.get(Dish, dish_id)
-    if not dish or dish.category.restaurant.owner != current_user:
+    if not dish or not has_restaurant_access(dish.category.restaurant):
         abort(404)
     form = DishForm(obj=dish)
     if form.validate_on_submit():
@@ -1424,6 +1799,8 @@ def edit_dish(dish_id: int):
         dish.description = form.description.data
         dish.price = form.price.data
         dish.available = form.available.data
+        dish.is_spicy = form.is_spicy.data
+        dish.is_vegan = form.is_vegan.data
         dish.currency = form.currency.data
         if form.image.data:
             dish.image_filename = save_file(form.image.data, DISH_FOLDER)
@@ -1437,7 +1814,7 @@ def edit_dish(dish_id: int):
 @login_required
 def delete_dish(dish_id: int):
     dish = db.session.get(Dish, dish_id)
-    if not dish or dish.category.restaurant.owner != current_user:
+    if not dish or not has_restaurant_access(dish.category.restaurant):
         abort(404)
     restaurant_id = dish.category.restaurant.id
     db.session.delete(dish)
@@ -1495,11 +1872,24 @@ def create_table(restaurant_id: int):
     return render_template("table_form.html", form=form, restaurant=restaurant)
 
 
+@app.route("/tables/<int:table_id>/status", methods=["POST"])
+@login_required
+def update_table_status(table_id: int):
+    table = db.session.get(DiningTable, table_id)
+    if not table or not has_restaurant_access(table.restaurant):
+        abort(404)
+    status = (request.form.get("status") or "").lower()
+    table.is_occupied = status == "occupied"
+    db.session.commit()
+    flash_t("table_marked_occupied" if table.is_occupied else "table_marked_free", "success")
+    return redirect(url_for("dashboard_tables"))
+
+
 @app.route("/tables/<int:table_id>/delete", methods=["POST"])
 @login_required
 def delete_table(table_id: int):
     table = db.session.get(DiningTable, table_id)
-    if not table or table.restaurant.owner != current_user:
+    if not table or not has_restaurant_access(table.restaurant):
         abort(404)
     restaurant_id = table.restaurant.id
     db.session.delete(table)
@@ -1512,7 +1902,7 @@ def delete_table(table_id: int):
 @login_required
 def table_qr(table_id: int):
     table = db.session.get(DiningTable, table_id)
-    if not table or table.restaurant.owner != current_user:
+    if not table or not has_restaurant_access(table.restaurant):
         abort(404)
     menu_url = url_for("public_menu", slug=table.restaurant.slug, table=table.number, _external=True)
     qr_path = QR_FOLDER / f"table_{table.id}.png"
@@ -1525,6 +1915,16 @@ def table_qr(table_id: int):
 @app.route("/menu/<slug>/")
 def public_menu(slug: str):
     restaurant = Restaurant.query.filter_by(slug=slug).first_or_404()
+    table_param = request.args.get("table")
+    active_table_number = None
+    if table_param:
+        try:
+            table_value = int(table_param)
+            table_obj = DiningTable.query.filter_by(restaurant_id=restaurant.id, number=table_value).first()
+            if table_obj and table_obj.is_occupied:
+                active_table_number = table_obj.number
+        except Exception:
+            active_table_number = None
     categories = (
         Category.query.filter_by(restaurant_id=restaurant.id).order_by(Category.sort_order, Category.name).all()
     )
@@ -1532,7 +1932,7 @@ def public_menu(slug: str):
         "public_menu.html",
         restaurant=restaurant,
         categories=categories,
-        table_number=request.args.get("table"),
+        table_number=active_table_number,
     )
 
 

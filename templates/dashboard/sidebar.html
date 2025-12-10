@@ -1,0 +1,20 @@
+{% set current = active_page or '' %}
+<aside class="dashboard-sidebar">
+    <div class="sidebar-header">
+        <p class="muted">{{ t('dashboard') }}</p>
+        <h2>{{ t('my_restaurants') }}</h2>
+    </div>
+    <nav class="sidebar-nav">
+        <a class="sidebar-link {{ 'active' if current == 'restaurants' else '' }}" href="{{ url_for('dashboard') }}">{{ t('my_restaurants') }}</a>
+        <a class="sidebar-link {{ 'active' if current == 'call_waiter' else '' }}" href="{{ url_for('dashboard_call_waiter') }}">{{ t('call_waiter') }}</a>
+        <a class="sidebar-link {{ 'active' if current == 'call_waiter_history' else '' }}" href="{{ url_for('dashboard_call_waiter_history') }}">{{ t('history') }}</a>
+        <div class="sidebar-group">
+            <div class="sidebar-link">{{ t('my_restaurants') }}</div>
+            <div class="sidebar-sub">
+                <a class="{{ 'active' if current == 'categories' else '' }}" href="{{ url_for('dashboard_categories') }}">{{ t('categories') }}</a>
+                <a class="{{ 'active' if current == 'tables' else '' }}" href="{{ url_for('dashboard_tables') }}">{{ t('tables') }}</a>
+            </div>
+        </div>
+    </nav>
+    <a class="btn primary full" href="{{ url_for('create_restaurant') }}">{{ t('new_restaurant') }}</a>
+</aside>
