@@ -119,6 +119,7 @@
         }
         categoryNav.classList.add('is-fixed');
         refreshSpacerHeight();
+        updateLangSwitchVisibility();
     };
 
     const unpinNav = () => {
@@ -129,6 +130,20 @@
         }
         navSpacer = null;
         setInitialTop();
+        updateLangSwitchVisibility();
+    };
+
+    const updateLangSwitchVisibility = () => {
+        const shouldHide = categoryNav && categoryNav.classList.contains('is-fixed');
+        const targets = [
+            document.querySelector('.lang-switch.top-right'),
+            document.getElementById('lang-select-top'),
+        ];
+        targets.forEach((el) => {
+            if (!el) return;
+            if (shouldHide) el.classList.add('is-hidden');
+            else el.classList.remove('is-hidden');
+        });
     };
 
     mobileQuery.addEventListener('change', (event) => {
@@ -138,10 +153,12 @@
         } else {
             unpinNav();
         }
+        updateLangSwitchVisibility();
     });
     window.addEventListener('resize', () => {
         refreshSpacerHeight();
         setInitialTop();
+        updateLangSwitchVisibility();
     });
 
     const handleScroll = () => {
@@ -157,6 +174,7 @@
         }
     };
     window.addEventListener('scroll', handleScroll, { passive: true });
+    updateLangSwitchVisibility();
 
     document.querySelectorAll('[data-scroll-to]').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -169,9 +187,7 @@
                 pinNavOnMobile();
             }
             if (trigger) {
-                if (typeof window.openAccordionExclusive === 'function') {
-                    window.openAccordionExclusive(trigger);
-                } else if (!trigger.classList.contains('open')) {
+                if (!trigger.classList.contains('open')) {
                     trigger.click();
                 }
                 requestAnimationFrame(() => {
@@ -194,5 +210,99 @@
     if (!toggle || !sidebar) return;
     toggle.addEventListener('click', () => {
         sidebar.classList.toggle('sidebar-open');
+    });
+})();
+
+(function initConfirmOverlay() {
+    const buttons = document.querySelectorAll('[data-confirm]');
+    if (!buttons.length) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+        <div class="confirm-card">
+            <h3>Confirm</h3>
+            <p data-confirm-message></p>
+            <div class="confirm-actions">
+                <button type="button" class="btn secondary" data-confirm-cancel>Cancel</button>
+                <button type="button" class="btn danger" data-confirm-accept>Delete</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    const msgEl = overlay.querySelector('[data-confirm-message]');
+    const btnCancel = overlay.querySelector('[data-confirm-cancel]');
+    const btnAccept = overlay.querySelector('[data-confirm-accept]');
+    let pendingForm = null;
+
+    const close = () => {
+        overlay.classList.remove('active');
+        pendingForm = null;
+    };
+
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const form = btn.closest('form');
+            if (!form) return;
+            pendingForm = form;
+            const message = btn.dataset.confirmMessage || 'Are you sure?';
+            const actionLabel = btn.dataset.confirmAction || 'Delete';
+            msgEl.textContent = message;
+            btnAccept.textContent = actionLabel;
+            overlay.classList.add('active');
+        });
+    });
+
+    btnCancel.addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close();
+    });
+    btnAccept.addEventListener('click', () => {
+        if (pendingForm) pendingForm.submit();
+        close();
+    });
+})();
+
+(function initUsernameSuggestions() {
+    const inputs = document.querySelectorAll('[data-username-suggest]');
+    if (!inputs.length) return;
+    const fetchSuggestions = async (input) => {
+        const query = input.value.trim();
+        const listId = input.getAttribute('list');
+        const datalist = listId ? document.getElementById(listId) : null;
+        if (!datalist) return;
+        datalist.innerHTML = "";
+        if (query.length < 2) return;
+        const url = input.dataset.suggestUrl || "/api/username_suggestions";
+        const requestUrl = `${url}?q=${encodeURIComponent(query)}`;
+        try {
+            const res = await fetch(requestUrl, { headers: { "Accept": "application/json" } });
+            if (!res.ok) return;
+            const data = await res.json();
+            const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+            suggestions.forEach(name => {
+                const option = document.createElement('option');
+                option.value = name;
+                datalist.appendChild(option);
+            });
+        } catch (err) {
+            // ignore network errors
+        }
+    };
+    inputs.forEach(input => {
+        let debounce;
+        input.addEventListener('input', () => {
+            clearTimeout(debounce);
+            debounce = setTimeout(() => fetchSuggestions(input), 180);
+        });
+        input.addEventListener('blur', () => {
+            const listId = input.getAttribute('list');
+            const datalist = listId ? document.getElementById(listId) : null;
+            if (!datalist) return;
+            const match = [...datalist.options].some(opt => opt.value === input.value);
+            if (match) return;
+            if (input.value.trim().length >= 2 && datalist.options.length) {
+                input.value = datalist.options[0].value;
+            }
+        });
     });
 })();

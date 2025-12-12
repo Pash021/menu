@@ -26,9 +26,7 @@
                         <span class="logo-circle">{{ restaurant_name[:1] }}</span>
                     {% endif %}
                 </h1>
-                <div class="brand-name">{{ restaurant_name }}</div>
                 {% if restaurant_description %}<p class="muted">{{ restaurant_description }}</p>{% endif %}
-                {% if table_number %}<p class="pill">{{ t('table_label') }} {{ table_number }}</p>{% endif %}
             </div>
         </header>
 
@@ -90,13 +88,16 @@
                                 <p class="muted">{{ preview_dish.translated_description(lang) }}</p>
                                 <div class="card-actions">
                                 {% if preview_dish.available and table_number %}
-                                <button class="btn add-btn" type="button"
+                                <button class="btn add-btn btn-add-cart" type="button"
                                     data-add
                                     data-id="{{ preview_dish.id }}"
                                     data-name="{{ preview_dish.translated_name(lang) }}"
                                     data-price="{{ preview_dish.price }}"
                                     data-currency="{{ preview_dish.currency_symbol() }}"
-                                >{{ t('add_to_cart') }}</button>
+                                >
+                                    <span class="btn-add-cart__icon" aria-hidden="true">+</span>
+                                    <span class="btn-add-cart__label">{{ t('add_to_cart') }}</span>
+                                </button>
                                 {% endif %}
                                     {% if not preview_dish.available %}<span class="badge">{{ t_menu('not_available') }}</span>{% endif %}
                                 </div>
@@ -137,7 +138,7 @@
                                             data-currency="{{ dish.currency_symbol() }}"
                                         >
                                             <span class="btn-add-cart__icon">+</span>
-                                            <span class="btn-add-cart__label">ավելացնել</span>
+                                            <span class="btn-add-cart__label">{{ t('add_to_cart') }}</span>
                                         </button>
                                         {% endif %}
                                         {% if not dish.available %}<span class="badge">{{ t_menu('not_available') }}</span>{% endif %}
@@ -202,15 +203,57 @@
 
     <script>
     const searchInput = document.querySelector('[data-search]');
+    const searchBar = document.querySelector('.search-bar');
     const dishes = document.querySelectorAll('[data-dish]');
-    if (searchInput) {
-        searchInput.addEventListener('input', () => {
-            const term = searchInput.value.toLowerCase().trim();
-            dishes.forEach(card => {
+    const categories = document.querySelectorAll('.accordion-item');
+    const panels = document.querySelectorAll('[data-acc-panel]');
+    const previews = document.querySelectorAll('[data-category-preview]');
+    const setOpenState = (item, open) => {
+        const panel = item.querySelector('[data-acc-panel]');
+        const trigger = item.querySelector('[data-acc-toggle]');
+        const preview = item.querySelector('[data-category-preview]');
+        if (panel) {
+            panel.style.maxHeight = open ? panel.scrollHeight + 'px' : '0px';
+            panel.style.opacity = open ? '1' : '0';
+        }
+        if (preview) {
+            preview.style.display = open ? 'none' : 'block';
+        }
+        item.classList.toggle('open', open);
+        trigger?.classList.toggle('open', open);
+    };
+    const runSearch = () => {
+        if (!searchInput) return;
+        const term = searchInput.value.toLowerCase().trim();
+        const hasTerm = term.length > 0;
+        categories.forEach((cat) => {
+            const panel = cat.querySelector('[data-acc-panel]');
+            let matches = 0;
+            cat.querySelectorAll('[data-dish]').forEach((card) => {
                 const name = card.querySelector('[data-dish-name]').textContent.toLowerCase();
-                card.style.display = name.includes(term) ? 'grid' : 'none';
+                const visible = !hasTerm || name.includes(term);
+                card.style.display = visible ? 'grid' : 'none';
+                if (visible) matches += 1;
             });
+            const hasMatch = matches > 0;
+            cat.style.display = hasMatch || !hasTerm ? '' : 'none';
+            if (panel) {
+                if (hasTerm && hasMatch) {
+                    setOpenState(cat, true);
+                } else if (!hasTerm) {
+                    setOpenState(cat, cat.classList.contains('open'));
+                }
+            }
         });
+        if (searchBar) {
+            searchBar.classList.toggle('search-active', hasTerm);
+            if (hasTerm) {
+                searchBar.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }
+    };
+    if (searchInput) {
+        searchInput.addEventListener('input', runSearch);
     }
     (function setupAccordion() {
         const accordion = document.querySelector('[data-accordion]');
@@ -228,8 +271,39 @@
         };
         const setHeight = (panel, open) => {
             if (!panel) return;
-            panel.style.maxHeight = open ? panel.scrollHeight + 'px' : '0';
-            panel.classList.toggle('open', open);
+            panel.style.maxHeight = open ? panel.scrollHeight + 'px' : '0px';
+            panel.style.opacity = open ? '1' : '0';
+        };
+        const showPreview = (preview) => {
+            if (!preview) return;
+            preview.style.display = 'block';
+            preview.style.maxHeight = preview.scrollHeight + 'px';
+            preview.style.opacity = '0';
+            requestAnimationFrame(() => {
+                preview.style.opacity = '1';
+            });
+            setTimeout(() => {
+                preview.style.maxHeight = '';
+                preview.style.opacity = '';
+            }, 420);
+        };
+        const hidePreview = (preview) => {
+            if (!preview) return;
+            preview.style.maxHeight = preview.scrollHeight + 'px';
+            preview.style.opacity = '1';
+            requestAnimationFrame(() => {
+                preview.style.maxHeight = '0px';
+                preview.style.opacity = '0';
+            });
+            const onEnd = (e) => {
+                if (e.propertyName === 'max-height') {
+                    preview.style.display = 'none';
+                    preview.style.maxHeight = '';
+                    preview.style.opacity = '';
+                    preview.removeEventListener('transitionend', onEnd);
+                }
+            };
+            preview.addEventListener('transitionend', onEnd);
         };
         const closeItem = (trigger) => {
             const panel = getPanel(trigger);
@@ -239,7 +313,7 @@
             trigger.closest('.accordion-item')?.classList.remove('open');
             setHeight(panel, false);
             chevron?.classList.remove('rotated');
-            if (preview) preview.style.display = '';
+            if (preview) showPreview(preview);
         };
         const openItem = (trigger) => {
             toggles.forEach((btn) => { if (btn !== trigger) closeItem(btn); });
@@ -250,7 +324,7 @@
             trigger.closest('.accordion-item')?.classList.add('open');
             setHeight(panel, true);
             chevron?.classList.add('rotated');
-            if (preview) preview.style.display = 'none';
+            if (preview) hidePreview(preview);
         };
         toggles.forEach((trigger) => {
             trigger.addEventListener('click', () => {
@@ -275,6 +349,11 @@
             if (target) {
                 const trigger = target.querySelector('[data-acc-toggle]');
                 if (trigger) openAccordionExclusive(trigger);
+                requestAnimationFrame(() => {
+                    target.classList.add('fade-highlight');
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
+                    setTimeout(() => target.classList.remove('fade-highlight'), 600);
+                });
             }
         });
     });

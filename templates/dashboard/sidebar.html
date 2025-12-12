@@ -5,16 +5,33 @@
         <h2>{{ t('my_restaurants') }}</h2>
     </div>
     <nav class="sidebar-nav">
+        {% if not is_manager_only %}
         <a class="sidebar-link {{ 'active' if current == 'restaurants' else '' }}" href="{{ url_for('dashboard') }}">{{ t('my_restaurants') }}</a>
-        <a class="sidebar-link {{ 'active' if current == 'call_waiter' else '' }}" href="{{ url_for('dashboard_call_waiter') }}">{{ t('call_waiter') }}</a>
+        {% endif %}
+        <a class="sidebar-link {{ 'active' if current == 'call_waiter' else '' }}" href="{{ url_for('dashboard_call_waiter') }}">{{ t('orders') }}</a>
         <a class="sidebar-link {{ 'active' if current == 'call_waiter_history' else '' }}" href="{{ url_for('dashboard_call_waiter_history') }}">{{ t('history') }}</a>
+        {% if is_manager_only and primary_restaurant_id %}
+        <a class="sidebar-link {{ 'active' if current == 'categories' else '' }}" href="{{ url_for('manage_restaurant', restaurant_id=primary_restaurant_id) }}">{{ t('categories') }}</a>
+        {% else %}
+        <a class="sidebar-link {{ 'active' if current == 'categories' else '' }}" href="{{ url_for('dashboard_categories') }}">{{ t('categories') }}</a>
+        {% endif %}
+        <a class="sidebar-link {{ 'active' if current == 'tables' else '' }}" href="{{ url_for('dashboard_tables') }}">{{ t('tables') }}</a>
+        {% if not is_manager_only %}
+        <a class="sidebar-link {{ 'active' if current == 'managers' else '' }}" href="{{ url_for('dashboard_managers') }}">{{ t('collaborators') }}</a>
+        {% endif %}
+        {% if is_admin %}
         <div class="sidebar-group">
-            <div class="sidebar-link">{{ t('my_restaurants') }}</div>
+            <div class="sidebar-link">{{ t('admin') }}</div>
             <div class="sidebar-sub">
-                <a class="{{ 'active' if current == 'categories' else '' }}" href="{{ url_for('dashboard_categories') }}">{{ t('categories') }}</a>
-                <a class="{{ 'active' if current == 'tables' else '' }}" href="{{ url_for('dashboard_tables') }}">{{ t('tables') }}</a>
+                <a href="{{ url_for('admin_users') }}">{{ t('all_users') }}</a>
+                <a href="{{ url_for('admin_restaurants') }}">{{ t('all_restaurants') }}</a>
             </div>
         </div>
+        {% endif %}
     </nav>
-    <a class="btn primary full" href="{{ url_for('create_restaurant') }}">{{ t('new_restaurant') }}</a>
+    {% if current_user.is_authenticated %}
+    <div class="sidebar-footer">
+        <a class="sidebar-link danger" href="{{ url_for('logout') }}">{{ t('logout') }}</a>
+    </div>
+    {% endif %}
 </aside>

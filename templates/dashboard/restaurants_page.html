@@ -13,7 +13,13 @@
         {% set translated_description = restaurant.translated_description(lang) %}
         <article class="card">
             <div class="card-header">
-                <div class="avatar">{{ translated_name[:1] }}</div>
+                <div class="avatar">
+                    {% if restaurant.logo_url() %}
+                        <img src="{{ restaurant.logo_url() }}" alt="{{ translated_name }}" style="width: 40px; height: 40px; border-radius: 12px; object-fit: cover;">
+                    {% else %}
+                        {{ translated_name[:1] }}
+                    {% endif %}
+                </div>
                 <div>
                     <h3>{{ translated_name }}</h3>
                     <p class="muted">{{ translated_description or t('no_description') }}</p>
@@ -23,6 +29,11 @@
                 <a href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}">{{ t('manage') }}</a>
                 <a href="{{ url_for('public_menu', slug=restaurant.slug) }}" target="_blank">{{ t('public_menu') }}</a>
                 <a href="{{ url_for('restaurant_qr', restaurant_id=restaurant.id) }}">{{ t('qr_code') }}</a>
+                {% if restaurant.owner == current_user or is_admin %}
+                <form method="post" action="{{ url_for('delete_restaurant', restaurant_id=restaurant.id) }}" onsubmit="return confirm('{{ t('delete') }}?');" style="margin: 0;">
+                    <button class="btn danger small" type="submit">{{ t('delete') }}</button>
+                </form>
+                {% endif %}
             </div>
         </article>
         {% else %}

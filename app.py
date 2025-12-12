@@ -43,6 +43,7 @@ from flask_login import (
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text, inspect
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from flask_wtf import FlaskForm
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -166,8 +167,11 @@ UI_TRANSLATIONS = {
         "all_users": "Все пользователи",
         "all_restaurants": "Все рестораны",
         "owner": "Владелец",
+        "manager": "Менеджер",
         "created": "Создано",
         "email": "Email",
+        "username": "Логин",
+        "username_or_email": "Логин или email",
         "password": "Пароль",
         "confirm_password": "Подтверждение пароля",
         "no_account": "Нет аккаунта?",
@@ -243,9 +247,26 @@ UI_TRANSLATIONS = {
         "table_marked_occupied": "Стол отмечен занятым",
         "table_marked_free": "Стол отмечен свободным",
         "no_tables": "Столы не добавлены",
+        "collaborators": "Менеджеры",
+        "collaborator_added": "Менеджер добавлен",
+        "collaborator_exists": "Менеджер уже назначен",
+        "collaborator_missing_fields": "Укажите логин и пароль",
+        "password_too_short": "Минимум 8 символов",
+        "password_requirements": "Пароль: минимум 8 символов, буквы и цифры, два символа не подряд",
+        "password_no_restaurant": "Пароль не должен содержать название ресторана",
+        "collaborator_removed": "Менеджер удален",
+        "password_updated": "Пароль обновлен",
+        "blocked": "Заблокирован",
+        "block": "Заблокировать",
+        "unblock": "Разблокировать",
+        "user_blocked_login": "Аккаунт заблокирован, обратитесь к администратору",
+        "user_blocked": "Пользователь заблокирован",
+        "user_unblocked": "Пользователь разблокирован",
+        "cannot_block_admin": "Нельзя блокировать админа или себя",
         "no_categories": "Категории еще не добавлены",
         "add_to_cart": "Добавить",
         "call_waiter": "Позвать официанта",
+        "orders": "Заказы",
         "table_label": "Стол",
         "cart_items": "товаров",
         "clear_cart": "Очистить",
@@ -280,8 +301,11 @@ UI_TRANSLATIONS = {
         "all_users": "All users",
         "all_restaurants": "All restaurants",
         "owner": "Owner",
+        "manager": "Manager",
         "created": "Created",
         "email": "Email",
+        "username": "Username",
+        "username_or_email": "Username or email",
         "password": "Password",
         "confirm_password": "Confirm password",
         "no_account": "No account?",
@@ -357,9 +381,27 @@ UI_TRANSLATIONS = {
         "table_marked_occupied": "Table marked occupied",
         "table_marked_free": "Table marked free",
         "no_tables": "No tables yet",
+        "collaborators": "Managers",
+        "collaborator_added": "Manager added",
+        "collaborator_exists": "Manager already assigned",
+        "collaborator_missing_fields": "Username and password are required",
+        "password_too_short": "Minimum 8 characters",
+        "password_requirements": "Password: 8+ chars, letters, digits, two symbols not adjacent",
+        "password_no_restaurant": "Password must not include the restaurant name",
+        "collaborator_removed": "Manager removed",
+        "password_updated": "Password updated",
+        "blocked": "Blocked",
+        "block": "Block",
+        "unblock": "Unblock",
+        "user_blocked_login": "Your account is blocked. Contact an administrator.",
+        "user_blocked": "User blocked",
+        "user_unblocked": "User unblocked",
+        "cannot_block_admin": "Cannot block an admin account",
+        "registered_orders": "Registered orders",
         "no_categories": "No categories yet",
         "add_to_cart": "Add",
         "call_waiter": "Call waiter",
+        "orders": "Orders",
         "table_label": "Table",
         "cart_items": "items",
         "clear_cart": "Clear",
@@ -394,8 +436,11 @@ UI_TRANSLATIONS = {
         "all_users": "Բոլոր օգտատերերը",
         "all_restaurants": "Բոլոր ռեստորանները",
         "owner": "Սեփականատեր",
+        "manager": "Մենեջեր",
         "created": "Ստեղծված է",
         "email": "Էլ.փոստ",
+        "username": "Մուտքանուն",
+        "username_or_email": "Մուտքանուն կամ email",
         "password": "Գաղտնաբառ",
         "confirm_password": "Հաստատեք գաղտնաբառը",
         "no_account": "Չունե՞ք հաշիվ",
@@ -471,9 +516,27 @@ UI_TRANSLATIONS = {
         "table_marked_occupied": "Սեղանը նշվեց զբաղված",
         "table_marked_free": "Սեղանը նշվեց ազատ",
         "no_tables": "Սեղաններ չկան",
+        "collaborators": "Մենեջերներ",
+        "collaborator_added": "Մենեջերը ավելացվեց",
+        "collaborator_exists": "Այս մենեջերը արդեն ավելացված է",
+        "collaborator_missing_fields": "Պետք է լրացնել մուտքանունը և գաղտնաբառը",
+        "password_too_short": "Առնվազն 8 նշան",
+        "password_requirements": "Գաղտնաբառը պետք է լինի 8+ նշան, պարունակի տառեր, թվեր և 2 նշան՝ ոչ միաժամանակ",
+        "password_no_restaurant": "Գաղտնաբառը չի կարող պարունակի ռեստորանի անունը",
+        "collaborator_removed": "Մենեջերը հեռացվեց",
+        "password_updated": "Գաղտնաբառը թարմացվեց",
+        "blocked": "Արգելափակված",
+        "block": "Արգելափակել",
+        "unblock": "Ապաբլոկավորել",
+        "user_blocked_login": "Հաշիվը արգելափակված է, դիմեք ադմինիստրատորին",
+        "user_blocked": "Օգտատերը արգելափակվեց",
+        "user_unblocked": "Մուտքն ակտիվացվեց",
+        "cannot_block_admin": "Չի կարելի արգելափակել ադմինին կամ ինքներդ ձեզ",
+        "registered_orders": "Գրանցված պատվերներ",
         "no_categories": "Կատեգորիաներ դեռ չկան",
         "add_to_cart": "Ավելացնել",
         "call_waiter": "Գրանցել պատվեր",
+        "orders": "Պատվերներ",
         "table_label": "Սեղան",
         "cart_items": "պատվեր",
         "clear_cart": "Մաքրել",
@@ -508,8 +571,11 @@ UI_TRANSLATIONS = {
         "all_users": "كل المستخدمين",
         "all_restaurants": "كل المطاعم",
         "owner": "المالك",
+        "manager": "مدير",
         "created": "تم الإنشاء",
         "email": "البريد الإلكتروني",
+        "username": "اسم المستخدم",
+        "username_or_email": "اسم المستخدم أو البريد",
         "password": "كلمة المرور",
         "confirm_password": "تأكيد كلمة المرور",
         "no_account": "لا تملك حساباً؟",
@@ -585,9 +651,26 @@ UI_TRANSLATIONS = {
         "table_marked_occupied": "تم وضع الطاولة كـ مشغولة",
         "table_marked_free": "تم وضع الطاولة كـ متاحة",
         "no_tables": "لا توجد طاولات بعد",
+        "collaborators": "المدراء",
+        "collaborator_added": "تمت إضافة مدير",
+        "collaborator_exists": "المدير مضاف مسبقاً",
+        "collaborator_missing_fields": "يجب إدخال اسم المستخدم وكلمة المرور",
+        "password_too_short": "الحد الأدنى 8 أحرف",
+        "password_requirements": "8 أحرف على الأقل مع حروف وأرقام ورمزين غير متتاليين",
+        "password_no_restaurant": "يجب ألا يحتوي على اسم المطعم",
+        "collaborator_removed": "تم حذف المدير",
+        "password_updated": "تم تحديث كلمة المرور",
+        "blocked": "محظور",
+        "block": "حظر",
+        "unblock": "إلغاء الحظر",
+        "user_blocked_login": "الحساب محظور. اتصل بالمسؤول.",
+        "user_blocked": "تم حظر المستخدم",
+        "user_unblocked": "تم إلغاء حظر المستخدم",
+        "cannot_block_admin": "لا يمكن حظر حساب المشرف",
         "no_categories": "لا توجد فئات بعد",
         "add_to_cart": "إضافة",
         "call_waiter": "نداء النادل",
+        "orders": "الطلبات",
         "table_label": "طاولة",
         "cart_items": "عناصر",
         "clear_cart": "تنظيف",
@@ -617,8 +700,11 @@ UI_TRANSLATIONS = {
         "all_users": "Todos los usuarios",
         "all_restaurants": "Todos los restaurantes",
         "owner": "Propietario",
+        "manager": "Gerente",
         "created": "Creado",
         "email": "Email",
+        "username": "Usuario",
+        "username_or_email": "Usuario o email",
         "password": "Contraseña",
         "confirm_password": "Confirmar contraseña",
         "no_account": "¿No tienes cuenta?",
@@ -694,9 +780,26 @@ UI_TRANSLATIONS = {
         "table_marked_occupied": "Mesa marcada ocupada",
         "table_marked_free": "Mesa marcada libre",
         "no_tables": "Aún no hay mesas",
+        "collaborators": "Gestores",
+        "collaborator_added": "Gestor añadido",
+        "collaborator_exists": "Gestor ya asignado",
+        "collaborator_missing_fields": "Usuario y contraseña requeridos",
+        "password_too_short": "Mínimo 8 caracteres",
+        "password_requirements": "8+ caracteres, letras, números y dos símbolos no consecutivos",
+        "password_no_restaurant": "La contraseña no debe contener el nombre del restaurante",
+        "collaborator_removed": "Gestor eliminado",
+        "password_updated": "Contraseña actualizada",
+        "blocked": "Bloqueado",
+        "block": "Bloquear",
+        "unblock": "Desbloquear",
+        "user_blocked_login": "La cuenta está bloqueada. Contacte con el administrador.",
+        "user_blocked": "Usuario bloqueado",
+        "user_unblocked": "Usuario desbloqueado",
+        "cannot_block_admin": "No se puede bloquear una cuenta de administrador",
         "no_categories": "Aún no hay categorías",
         "add_to_cart": "Añadir",
         "call_waiter": "Llamar al camarero",
+        "orders": "Pedidos",
         "table_label": "Mesa",
         "cart_items": "artículos",
         "clear_cart": "Vaciar",
@@ -726,8 +829,11 @@ UI_TRANSLATIONS = {
         "all_users": "Alle Benutzer",
         "all_restaurants": "Alle Restaurants",
         "owner": "Inhaber",
+        "manager": "Manager",
         "created": "Erstellt",
         "email": "Email",
+        "username": "Benutzername",
+        "username_or_email": "Benutzername oder Email",
         "password": "Passwort",
         "confirm_password": "Passwort bestätigen",
         "no_account": "Kein Konto?",
@@ -803,9 +909,26 @@ UI_TRANSLATIONS = {
         "table_marked_occupied": "Tisch als belegt markiert",
         "table_marked_free": "Tisch als frei markiert",
         "no_tables": "Noch keine Tische",
+        "collaborators": "Manager",
+        "collaborator_added": "Manager hinzugefügt",
+        "collaborator_exists": "Manager bereits zugeordnet",
+        "collaborator_missing_fields": "Benutzername und Passwort angeben",
+        "password_too_short": "Mindestens 8 Zeichen",
+        "password_requirements": "Mind. 8 Zeichen, Buchstaben, Zahlen und zwei nicht aufeinanderfolgende Symbole",
+        "password_no_restaurant": "Passwort darf den Restaurantnamen nicht enthalten",
+        "collaborator_removed": "Manager entfernt",
+        "password_updated": "Passwort aktualisiert",
+        "blocked": "Gesperrt",
+        "block": "Sperren",
+        "unblock": "Entsperren",
+        "user_blocked_login": "Konto gesperrt. Bitte den Administrator kontaktieren.",
+        "user_blocked": "Benutzer gesperrt",
+        "user_unblocked": "Benutzer entsperrt",
+        "cannot_block_admin": "Administrator-Konto kann nicht gesperrt werden",
         "no_categories": "Noch keine Kategorien",
         "add_to_cart": "Hinzufügen",
         "call_waiter": "Kellner rufen",
+        "orders": "Bestellungen",
         "table_label": "Tisch",
         "cart_items": "Artikel",
         "clear_cart": "Leeren",
@@ -832,8 +955,11 @@ UI_TRANSLATIONS = {
         "all_users": "सभी उपयोगकर्ता",
         "all_restaurants": "सभी रेस्टोरेंट",
         "owner": "मालिक",
+        "manager": "प्रबंधक",
         "created": "बनाया गया",
         "email": "ईमेल",
+        "username": "उपयोगकर्ता नाम",
+        "username_or_email": "उपयोगकर्ता नाम या ईमेल",
         "password": "पासवर्ड",
         "confirm_password": "पासवर्ड की पुष्टि",
         "no_account": "खाता नहीं है?",
@@ -909,9 +1035,26 @@ UI_TRANSLATIONS = {
         "table_marked_occupied": "टेबल को व्यस्त किया गया",
         "table_marked_free": "टेबल को खाली किया गया",
         "no_tables": "अभी कोई टेबल नहीं है",
+        "collaborators": "प्रबंधक",
+        "collaborator_added": "प्रबंधक जोड़ा गया",
+        "collaborator_exists": "प्रबंधक पहले से जुड़ा है",
+        "collaborator_missing_fields": "उपयोगकर्ता नाम और पासवर्ड आवश्यक हैं",
+        "password_too_short": "कम से कम 8 वर्ण",
+        "password_requirements": "पासवर्ड 8+ वर्ण का हो, अक्षर, अंक और दो अलग-अलग विशेष चिन्ह शामिल हों",
+        "password_no_restaurant": "पासवर्ड में रेस्तरां का नाम नहीं होना चाहिए",
+        "collaborator_removed": "प्रबंधक हटाया गया",
+        "password_updated": "पासवर्ड अपडेट किया गया",
+        "blocked": "ब्लॉक किया गया",
+        "block": "ब्लॉक करें",
+        "unblock": "ब्लॉक हटाएं",
+        "user_blocked_login": "खाता ब्लॉक है। एडमिन से संपर्क करें।",
+        "user_blocked": "उपयोगकर्ता ब्लॉक हुआ",
+        "user_unblocked": "उपयोगकर्ता अनब्लॉक हुआ",
+        "cannot_block_admin": "ऐडमिन खाते को ब्लॉक नहीं कर सकते",
         "no_categories": "अभी कैटेगरी नहीं हैं",
         "add_to_cart": "जोड़ें",
         "call_waiter": "वेटर बुलाएँ",
+        "orders": "ऑर्डर",
         "table_label": "टेबल",
         "cart_items": "आइटम",
         "clear_cart": "खाली करें",
@@ -930,6 +1073,13 @@ UI_TRANSLATIONS = {
         "status_delivered": "डिलीवर",
         "status_canceled": "रद्द",
     },
+}
+
+ROLE_TRANSLATION_KEYS = {
+    "owner": "owner",
+    "manager": "manager",
+    "admin": "admin",
+    "superadmin": "admin",
 }
 # Database configuration (MySQL by default; override via env)
 DB_HOST = os.environ.get("DB_HOST", "127.0.0.1")
@@ -966,8 +1116,11 @@ elif Translator:
 
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(120), unique=True, nullable=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
+    role = db.Column(db.String(20), default="owner")
+    is_blocked = db.Column(db.Boolean, default=False)
     restaurants = db.relationship("Restaurant", backref="owner", lazy=True)
 
     def set_password(self, password: str) -> None:
@@ -1009,6 +1162,16 @@ class Restaurant(db.Model):
             return self.description or ""
         translations = self.description_translations or {}
         return translations.get(lang) or (self.description or "")
+
+
+class RestaurantUser(db.Model):
+    __tablename__ = "restaurant_user"
+    id = db.Column(db.Integer, primary_key=True)
+    restaurant_id = db.Column(db.Integer, db.ForeignKey("restaurant.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    role = db.Column(db.String(50), default="manager")
+
+    __table_args__ = (db.UniqueConstraint("restaurant_id", "user_id", name="uq_restaurant_user"),)
 
 
 class Category(db.Model):
@@ -1122,6 +1285,125 @@ def ensure_table_occupancy_column() -> None:
 ensure_table_occupancy_column()
 
 
+def ensure_collaborator_table() -> None:
+    """Create restaurant_user helper table if missing."""
+    try:
+        with app.app_context():
+            db.session.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS `restaurant_user` (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        restaurant_id INT NOT NULL,
+                        user_id INT NOT NULL,
+                        role VARCHAR(50) DEFAULT 'manager',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE KEY uq_restaurant_user (restaurant_id, user_id),
+                        KEY idx_restaurant_user_rest (restaurant_id),
+                        KEY idx_restaurant_user_user (user_id),
+                        CONSTRAINT fk_ru_rest FOREIGN KEY (restaurant_id) REFERENCES restaurant(id) ON DELETE CASCADE,
+                        CONSTRAINT fk_ru_user FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+ensure_collaborator_table()
+
+
+def ensure_username_column() -> None:
+    """Add username column if missing (unique, nullable)."""
+    try:
+        with app.app_context():
+            inspector = inspect(db.engine)
+            columns = {col["name"] for col in inspector.get_columns("user")} if inspector.has_table("user") else set()
+            if "username" not in columns:
+                try:
+                    with db.engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE `user` ADD COLUMN username VARCHAR(120) UNIQUE"))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+ensure_username_column()
+
+
+def ensure_user_role_column() -> None:
+    """Normalize roles: default to owner, demote stale admins to owner, reapply .env admins."""
+    try:
+        with app.app_context():
+            try:
+                db.session.execute(text("ALTER TABLE `user` ADD COLUMN role VARCHAR(20) DEFAULT 'owner'"))
+            except Exception:
+                db.session.rollback()
+            try:
+                db.session.execute(
+                    text("UPDATE `user` SET role = 'owner' WHERE role IS NULL OR role = '' OR role = 'user'")
+                )
+                # Demote any lingering admins to owner before reapplying env admins
+                db.session.execute(text("UPDATE `user` SET role = 'owner' WHERE role IN ('admin', 'superadmin')"))
+                if ADMIN_EMAILS:
+                    for email in ADMIN_EMAILS:
+                        db.session.execute(
+                            text("UPDATE `user` SET role = 'admin' WHERE LOWER(email) = :email"),
+                            {"email": email.lower()},
+                        )
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+    except Exception:
+        pass
+
+
+ensure_user_role_column()
+
+
+def ensure_user_blocked_column() -> None:
+    """Add is_blocked flag to users for admin lockout control."""
+    try:
+        with app.app_context():
+            inspector = inspect(db.engine)
+            if not inspector.has_table("user"):
+                return
+            columns = {col["name"] for col in inspector.get_columns("user")}
+            if "is_blocked" not in columns:
+                try:
+                    db.session.execute(text("ALTER TABLE `user` ADD COLUMN is_blocked TINYINT(1) DEFAULT 0"))
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+    except Exception:
+        pass
+
+
+ensure_user_blocked_column()
+
+
+def ensure_username_values() -> None:
+    """Backfill usernames for users missing them."""
+    try:
+        with app.app_context():
+            inspector = inspect(db.engine)
+            if not inspector.has_table("user"):
+                return
+            missing = User.query.filter((User.username == None) | (User.username == "")).all()  # noqa: E711
+            changed = False
+            for user in missing:
+                base = (user.email or "").split("@")[0] or secrets.token_hex(3)
+                user.username = unique_username(base)
+                changed = True
+            if changed:
+                db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
 @login_manager.user_loader
 def load_user(user_id: str):
     return db.session.get(User, int(user_id))
@@ -1153,6 +1435,62 @@ def unique_slug(base: str) -> str:
     return candidate
 
 
+def sanitize_username(raw: str) -> str:
+    cleaned = slugify(raw).replace("-", "")
+    if not cleaned:
+        cleaned = slugify(raw)
+    cleaned = cleaned or secrets.token_hex(3)
+    return cleaned[:60]
+
+
+def unique_username(raw: str) -> str:
+    base_username = sanitize_username(raw)
+    candidate = base_username
+    index = 1
+    while User.query.filter_by(username=candidate).first():
+        candidate = f"{base_username}-{index}"
+        index += 1
+    return candidate
+
+
+def generate_manager_email(username: str, restaurant: Restaurant | None = None) -> str:
+    suffix = "manager.local"
+    if restaurant and restaurant.slug:
+        suffix = f"manager.{restaurant.slug}"
+    base_email = f"{username}@{suffix}"
+    candidate = base_email
+    index = 1
+    while User.query.filter_by(email=candidate).first():
+        candidate = f"{username}-{index}@{suffix}"
+        index += 1
+    return candidate
+
+
+ensure_username_values()
+
+
+@app.route("/api/username_suggestions")
+@login_required
+def api_username_suggestions():
+    query = (request.args.get("q") or "").strip()
+    sanitized = sanitize_username(query)
+    if not sanitized:
+        return {"suggestions": []}
+    suggestions: list[str] = []
+    base = sanitized
+    idx = 0
+    while len(suggestions) < 5 and idx < 20:
+        candidate = base if idx == 0 else f"{base}-{idx}"
+        exists = User.query.filter(or_(User.username == candidate, User.email == generate_manager_email(candidate))).first()
+        if not exists:
+            suggestions.append(candidate)
+        idx += 1
+    return {"suggestions": suggestions}
+
+
+ensure_username_values()
+
+
 def save_file(file_storage, folder: Path) -> str | None:
     if not file_storage or not getattr(file_storage, "filename", None):
         return None
@@ -1174,9 +1512,24 @@ def is_image_filename(name: str | None) -> bool:
 def is_admin_user(user: User | None) -> bool:
     if not user:
         return False
-    if user.email.lower() in ADMIN_EMAILS:
+    email = (getattr(user, "email", "") or "").lower()
+    if email in ADMIN_EMAILS:
+        if getattr(user, "role", None) not in {"admin", "superadmin"}:
+            user.role = "admin"
+            db.session.commit()
         return True
-    return False
+    # Allow explicit superadmin fallback (e.g., manual override)
+    return getattr(user, "role", None) == "superadmin"
+
+
+def is_manager_only(user: User) -> bool:
+    if is_admin_user(user):
+        return False
+    owns = Restaurant.query.filter_by(user_id=user.id).count()
+    if owns > 0:
+        return False
+    manager_links = RestaurantUser.query.filter_by(user_id=user.id).count()
+    return manager_links > 0
 
 
 def has_restaurant_access(restaurant: Restaurant | None) -> bool:
@@ -1184,7 +1537,15 @@ def has_restaurant_access(restaurant: Restaurant | None) -> bool:
         return False
     if current_user.is_authenticated and is_admin_user(current_user):
         return True
-    return restaurant.owner == current_user
+    if restaurant.owner == current_user:
+        return True
+    # Managers linked to restaurant
+    if current_user.is_authenticated:
+        return (
+            RestaurantUser.query.filter_by(restaurant_id=restaurant.id, user_id=current_user.id).first()
+            is not None
+        )
+    return False
 
 
 def translate_text(text: str, target_lang: str) -> str | None:
@@ -1213,6 +1574,46 @@ def translate_menu(key: str, lang: str) -> str:
     return table.get(key) or fallback_table.get(key) or key
 
 
+def is_strong_password(password: str) -> bool:
+    if not password or len(password) < 8:
+        return False
+    has_alpha = any(ch.isalpha() for ch in password)
+    has_digit = any(ch.isdigit() for ch in password)
+    symbol_positions = [idx for idx, ch in enumerate(password) if not ch.isalnum()]
+    has_symbols = len(symbol_positions) >= 2 and any(
+        (symbol_positions[i + 1] - symbol_positions[i]) > 1 for i in range(len(symbol_positions) - 1)
+    )
+    return has_alpha and has_digit and has_symbols
+
+
+def contains_restaurant_hint(password: str, restaurant: Restaurant | None) -> bool:
+    if not restaurant or not password:
+        return False
+    norm_pwd = "".join(ch.lower() for ch in password if ch.isalnum())
+    if not norm_pwd:
+        return False
+    name_candidates = [restaurant.name, restaurant.slug]
+    for trans in (restaurant.name_translations or {}).values():
+        name_candidates.append(trans)
+    for candidate in name_candidates:
+        if not candidate:
+            continue
+        norm_candidate = "".join(ch.lower() for ch in candidate if ch.isalnum())
+        if norm_candidate and norm_candidate in norm_pwd:
+            return True
+    return False
+
+
+def translate_role(role: str | None, lang: str) -> str:
+    if not role:
+        return ""
+    key = ROLE_TRANSLATION_KEYS.get(role, role)
+    label = translate_ui(key, lang)
+    if label == key:
+        return role.capitalize()
+    return label
+
+
 def admin_required(func):
     from functools import wraps
 
@@ -1231,7 +1632,16 @@ def flash_t(key: str, category: str = "info"):
 
 
 def get_user_restaurants(user: User) -> list[Restaurant]:
-    return Restaurant.query.filter_by(user_id=user.id).all()
+    owned = Restaurant.query.filter_by(user_id=user.id).all()
+    managed = (
+        Restaurant.query.join(RestaurantUser, Restaurant.id == RestaurantUser.restaurant_id)
+        .filter(RestaurantUser.user_id == user.id)
+        .all()
+    )
+    rest_map: dict[int, Restaurant] = {r.id: r for r in owned}
+    for r in managed:
+        rest_map.setdefault(r.id, r)
+    return list(rest_map.values())
 
 
 def build_restaurant_collections(restaurants: list[Restaurant]) -> tuple[dict[int, list[Category]], dict[int, list[DiningTable]]]:
@@ -1255,6 +1665,22 @@ def build_restaurant_collections(restaurants: list[Restaurant]) -> tuple[dict[in
     for table in tables:
         tables_by_rest.setdefault(table.restaurant_id, []).append(table)
     return categories_by_rest, tables_by_rest
+
+
+def build_restaurant_managers(restaurants: list[Restaurant]) -> dict[int, list[User]]:
+    managers_by_rest: dict[int, list[dict]] = {}
+    restaurant_ids = [r.id for r in restaurants]
+    if not restaurant_ids:
+        return managers_by_rest
+    rows = (
+        db.session.query(RestaurantUser, User)
+        .join(User, User.id == RestaurantUser.user_id)
+        .filter(RestaurantUser.restaurant_id.in_(restaurant_ids))
+        .all()
+    )
+    for link, user in rows:
+        managers_by_rest.setdefault(link.restaurant_id, []).append({"user": user, "link_id": link.id})
+    return managers_by_rest
 
 
 def populate_translations_for_category(category: Category):
@@ -1356,9 +1782,44 @@ def set_lang():
     g.is_admin = is_admin_user(current_user) if current_user.is_authenticated else False
 
 
+@app.before_request
+def enforce_blocked_users():
+    """Prevent blocked users from using the app after logout/login."""
+    if not current_user.is_authenticated:
+        return None
+    if getattr(current_user, "is_blocked", False):
+        endpoint = (request.endpoint or "").split(".")[0]
+        if endpoint not in {"login", "logout"} and not endpoint.startswith("static"):
+            logout_user()
+            flash_t("user_blocked_login", "danger")
+            return redirect(url_for("login"))
+    return None
+
+
 @app.context_processor
 def inject_lang():
     lang = getattr(g, "lang", DEFAULT_LANG)
+    effective_role = None
+    manager_restaurant_name = ""
+    primary_restaurant_id = None
+    if current_user.is_authenticated:
+        user_restaurants = get_user_restaurants(current_user)
+        if user_restaurants:
+            primary_restaurant_id = user_restaurants[0].id
+        if is_admin_user(current_user):
+            effective_role = "admin"
+        else:
+            raw_role = getattr(current_user, "role", None)
+            # If env no longer grants admin, fall back to owner instead of stale admin flag.
+            if raw_role in {"admin", "superadmin"}:
+                effective_role = "owner"
+            else:
+                effective_role = raw_role
+        if effective_role == "manager":
+            if user_restaurants:
+                manager_restaurant_name = user_restaurants[0].translated_name(lang)
+    else:
+        pass
     return {
         "lang": lang,
         "languages": LANGUAGES,
@@ -1366,17 +1827,30 @@ def inject_lang():
         "t": lambda key: translate_ui(key, lang),
         "t_menu": lambda key: translate_menu(key, lang),
         "is_admin": is_admin_user(current_user) if current_user.is_authenticated else False,
+        "is_manager_only": is_manager_only(current_user) if current_user.is_authenticated else False,
+        "current_role_label": translate_role(effective_role, lang) if effective_role else "",
+        "manager_restaurant_name": manager_restaurant_name,
+        "primary_restaurant_id": primary_restaurant_id,
+        "can_create_restaurants": (
+            is_admin_user(current_user)
+            or (current_user.is_authenticated and not is_manager_only(current_user))
+        ),
     }
 
 
 class RegistrationForm(FlaskForm):
     email = StringField("Email", validators=[DataRequired(), Email(), Length(max=120)])
-    password = PasswordField("Пароль", validators=[DataRequired(), Length(min=6)])
+    password = PasswordField("Пароль", validators=[DataRequired(), Length(min=8)])
     confirm = PasswordField("Подтверждение", validators=[DataRequired(), EqualTo("password")])
+
+class PasswordChangeForm(FlaskForm):
+    current_password = PasswordField("Текущий пароль", validators=[DataRequired()])
+    new_password = PasswordField("Новый пароль", validators=[DataRequired(), Length(min=8)])
+    confirm_new_password = PasswordField("Подтверждение", validators=[DataRequired(), EqualTo("new_password")])
 
 
 class LoginForm(FlaskForm):
-    email = StringField("Email", validators=[DataRequired(), Email()])
+    identifier = StringField("Email или логин", validators=[DataRequired(), Length(max=120)])
     password = PasswordField("Пароль", validators=[DataRequired()])
 
 
@@ -1433,6 +1907,8 @@ def uploaded_file(filename):
 @app.route("/")
 def home():
     if current_user.is_authenticated:
+        if is_manager_only(current_user):
+            return redirect(url_for("dashboard_call_waiter"))
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
 
@@ -1447,8 +1923,13 @@ def register():
         if existing:
             flash_t("user_exists", "warning")
         else:
+            if not is_strong_password(form.password.data):
+                flash_t("password_requirements", "warning")
+                return render_template("auth/register.html", form=form)
             user = User(email=form.email.data.lower())
+            user.username = unique_username(form.email.data.split("@")[0])
             user.set_password(form.password.data)
+            user.role = "admin" if user.email.lower() in ADMIN_EMAILS else "owner"
             db.session.add(user)
             db.session.commit()
             flash_t("account_created", "success")
@@ -1462,10 +1943,23 @@ def login():
         return redirect(url_for("dashboard"))
     form = LoginForm()
     if form.validate_on_submit():
-        user = User.query.filter_by(email=form.email.data.lower()).first()
+        identifier = (form.identifier.data or "").strip().lower()
+        login_with_username = "@" not in identifier
+        user = (
+            User.query.filter_by(username=identifier).first()
+            if login_with_username
+            else User.query.filter_by(email=identifier).first()
+        )
         if not user or not user.check_password(form.password.data):
             flash_t("bad_credentials", "danger")
+        elif getattr(user, "is_blocked", False):
+            flash_t("user_blocked_login", "danger")
         else:
+            if not is_admin_user(user):
+                desired_role = "manager" if login_with_username else "owner"
+                if user.role != desired_role:
+                    user.role = desired_role
+                    db.session.commit()
             login_user(user)
             return redirect(url_for("dashboard"))
     return render_template("auth/login.html", form=form)
@@ -1482,10 +1976,14 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
+    if is_manager_only(current_user):
+        return redirect(url_for("dashboard_call_waiter"))
     restaurants = get_user_restaurants(current_user)
+    managers_by_rest = build_restaurant_managers(restaurants)
     return render_template(
         "dashboard/restaurants_page.html",
         restaurants=restaurants,
+        managers_by_rest=managers_by_rest,
         active_page="restaurants",
         body_class="dashboard-page",
     )
@@ -1501,6 +1999,8 @@ def dashboard_call_waiter():
         .limit(50)
         .all()
     )
+    restaurants = get_user_restaurants(current_user)
+    _, tables_by_rest = build_restaurant_collections(restaurants)
     requests_data = [r.as_dict() for r in requests]
     new_requests_data = [r for r in requests_data if r.get("status") == "new"]
     lang = getattr(g, "lang", DEFAULT_LANG)
@@ -1515,6 +2015,8 @@ def dashboard_call_waiter():
         requests=requests_data,
         new_requests=new_requests_data,
         status_labels=status_labels,
+        restaurants=restaurants,
+        tables_by_rest=tables_by_rest,
         active_page="call_waiter",
         body_class="dashboard-page",
     )
@@ -1579,6 +2081,20 @@ def dashboard_tables():
     )
 
 
+@app.route("/dashboard/managers")
+@login_required
+def dashboard_managers():
+    restaurants = get_user_restaurants(current_user)
+    managers_by_rest = build_restaurant_managers(restaurants)
+    return render_template(
+        "dashboard/managers_page.html",
+        restaurants=restaurants,
+        managers_by_rest=managers_by_rest,
+        active_page="managers",
+        body_class="dashboard-page",
+    )
+
+
 @app.route("/api/my/call_requests")
 @login_required
 def api_my_call_requests():
@@ -1626,7 +2142,15 @@ def admin_users():
     restaurants_by_user: dict[int, list[Restaurant]] = {}
     for r in Restaurant.query.order_by(Restaurant.user_id, Restaurant.name).all():
         restaurants_by_user.setdefault(r.user_id, []).append(r)
-    return render_template("admin_users.html", users=users, restaurants_by_user=restaurants_by_user)
+    all_restaurants = [r for rest_list in restaurants_by_user.values() for r in rest_list]
+    managers_by_rest = build_restaurant_managers(all_restaurants)
+    return render_template(
+        "admin_users.html",
+        users=users,
+        restaurants_by_user=restaurants_by_user,
+        managers_by_rest=managers_by_rest,
+        admin_emails=ADMIN_EMAILS,
+    )
 
 
 @app.route("/admin/restaurants")
@@ -1637,15 +2161,9 @@ def admin_restaurants():
     return render_template("admin_restaurants.html", restaurants=restaurants)
 
 
-@app.route("/admin/restaurants/<int:restaurant_id>/delete", methods=["POST"])
-@login_required
-@admin_required
-def admin_delete_restaurant(restaurant_id: int):
-    restaurant = db.session.get(Restaurant, restaurant_id)
-    if not restaurant:
-        abort(404)
+def _delete_restaurant_with_children(restaurant: Restaurant) -> bool:
+    """Hard-delete restaurant and dependent rows to satisfy strict FK constraints."""
     try:
-        # Hard-delete dependent rows to satisfy strict FK constraints in MySQL
         db.session.execute(text("DELETE FROM `call_request` WHERE restaurant_id = :rid"), {"rid": restaurant.id})
         db.session.execute(
             text(
@@ -1661,16 +2179,45 @@ def admin_delete_restaurant(restaurant_id: int):
         db.session.execute(text("DELETE FROM `restaurant_tables` WHERE restaurant_id = :rid"), {"rid": restaurant.id})
         db.session.delete(restaurant)
         db.session.commit()
-        flash_t("restaurant_deleted", "info")
+        return True
     except IntegrityError:
         db.session.rollback()
+        return False
+
+
+@app.route("/admin/restaurants/<int:restaurant_id>/delete", methods=["POST"])
+@login_required
+def admin_delete_restaurant(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not is_admin_user(current_user):
+        abort(404)
+    if _delete_restaurant_with_children(restaurant):
+        flash_t("restaurant_deleted", "info")
+    else:
         flash_t("restaurant_delete_failed", "danger")
     return redirect(request.referrer or url_for("admin_users"))
+
+
+@app.route("/restaurants/<int:restaurant_id>/delete", methods=["POST"])
+@login_required
+def delete_restaurant(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant:
+        abort(404)
+    if not (restaurant.owner == current_user or is_admin_user(current_user)):
+        abort(403)
+    if _delete_restaurant_with_children(restaurant):
+        flash_t("restaurant_deleted", "info")
+    else:
+        flash_t("restaurant_delete_failed", "danger")
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/restaurants/new", methods=["GET", "POST"])
 @login_required
 def create_restaurant():
+    if is_manager_only(current_user) and not is_admin_user(current_user):
+        abort(403)
     form = RestaurantForm()
     translation_values = build_translation_context(None)
     if form.validate_on_submit():
@@ -1706,7 +2253,9 @@ def require_restaurant_owned(restaurant_id: int) -> Restaurant:
 @app.route("/restaurants/<int:restaurant_id>/edit", methods=["GET", "POST"])
 @login_required
 def edit_restaurant(restaurant_id: int):
-    restaurant = require_restaurant_owned(restaurant_id)
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or (restaurant.owner != current_user and not is_admin_user(current_user)):
+        abort(403)
     form = RestaurantForm(obj=restaurant)
     translation_values = build_translation_context(restaurant)
     if form.validate_on_submit():
@@ -1754,6 +2303,7 @@ def manage_restaurant(restaurant_id: int):
         categories=categories,
         tables=tables,
         dish_forms=dish_forms,
+        active_page="categories",
     )
 
 
@@ -1921,6 +2471,134 @@ def create_table(restaurant_id: int):
     return render_template("table_form.html", form=form, restaurant=restaurant)
 
 
+@app.route("/restaurants/<int:restaurant_id>/collaborators", methods=["POST"])
+@login_required
+def add_collaborator(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or (restaurant.owner != current_user and not is_admin_user(current_user)):
+        abort(403)
+    username_input = (request.form.get("username") or "").strip()
+    password = (request.form.get("password") or "").strip()
+    if not username_input or not password:
+        flash_t("collaborator_missing_fields", "warning")
+        return redirect(request.referrer or url_for("dashboard"))
+    if len(password) < 8:
+        flash_t("password_too_short", "warning")
+        return redirect(request.referrer or url_for("dashboard"))
+    if not is_strong_password(password):
+        flash_t("password_requirements", "warning")
+        return redirect(request.referrer or url_for("dashboard"))
+    if contains_restaurant_hint(password, restaurant):
+        flash_t("password_no_restaurant", "warning")
+        return redirect(request.referrer or url_for("dashboard"))
+    desired_username = sanitize_username(username_input)
+    if not desired_username:
+        flash_t("collaborator_missing_fields", "warning")
+        return redirect(request.referrer or url_for("dashboard"))
+    user = User.query.filter_by(username=desired_username).first()
+    if not user:
+        final_username = unique_username(desired_username)
+        user = User(username=final_username, email=generate_manager_email(final_username, restaurant))
+        user.set_password(password)
+        user.role = "manager"
+        db.session.add(user)
+        db.session.flush()
+    else:
+        if not is_admin_user(user):
+            user.role = "manager"
+        if not user.username:
+            user.username = unique_username(desired_username)
+        user.set_password(password)
+    existing = RestaurantUser.query.filter_by(restaurant_id=restaurant.id, user_id=user.id).first()
+    if existing:
+        flash_t("collaborator_exists", "info")
+    else:
+        link = RestaurantUser(restaurant_id=restaurant.id, user_id=user.id, role="manager")
+        db.session.add(link)
+        flash_t("collaborator_added", "success")
+    db.session.commit()
+    return redirect(request.referrer or url_for("dashboard"))
+
+
+@app.route("/admin/collaborators/<int:link_id>/delete", methods=["POST"])
+@login_required
+def admin_remove_collaborator(link_id: int):
+    link = db.session.get(RestaurantUser, link_id)
+    if not link:
+        abort(404)
+    restaurant = db.session.get(Restaurant, link.restaurant_id)
+    if not (is_admin_user(current_user) or (restaurant and restaurant.owner == current_user)):
+        abort(403)
+    db.session.delete(link)
+    db.session.commit()
+    flash_t("collaborator_removed", "info")
+    return redirect(request.referrer or url_for("dashboard"))
+
+
+@app.route("/admin/users/<int:user_id>/password", methods=["POST"])
+@login_required
+@admin_required
+def admin_reset_user_password(user_id: int):
+    user = db.session.get(User, user_id)
+    if not user:
+        abort(404)
+    new_password = (request.form.get("password") or "").strip()
+    if not new_password or len(new_password) < 8:
+        flash_t("password_too_short", "warning")
+        return redirect(request.referrer or url_for("admin_users"))
+    if not is_strong_password(new_password):
+        flash_t("password_requirements", "warning")
+        return redirect(request.referrer or url_for("admin_users"))
+    user.set_password(new_password)
+    db.session.commit()
+    flash_t("password_updated", "success")
+    return redirect(request.referrer or url_for("admin_users"))
+
+
+@app.route("/admin/users/<int:user_id>/block", methods=["POST"])
+@login_required
+@admin_required
+def admin_toggle_user_block(user_id: int):
+    user = db.session.get(User, user_id)
+    if not user:
+        abort(404)
+    if user.id == current_user.id or is_admin_user(user):
+        flash_t("cannot_block_admin", "warning")
+        return redirect(request.referrer or url_for("admin_users"))
+    action = (request.form.get("action") or "block").lower()
+    block = action != "unblock"
+    user.is_blocked = block
+    db.session.commit()
+    flash_t("user_blocked" if block else "user_unblocked", "info")
+    return redirect(request.referrer or url_for("admin_users"))
+
+
+@app.route("/admin/users/<int:user_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_delete_user(user_id: int):
+    user = db.session.get(User, user_id)
+    if not user:
+        abort(404)
+    if user.id == current_user.id or (getattr(user, "email", "").lower() in ADMIN_EMAILS):
+        flash("Cannot delete this user", "warning")
+        return redirect(request.referrer or url_for("admin_users"))
+    try:
+        # Remove restaurants owned by the user
+        restaurants = Restaurant.query.filter_by(user_id=user.id).all()
+        for r in restaurants:
+            _delete_restaurant_with_children(r)
+        # Remove manager links
+        RestaurantUser.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        db.session.delete(user)
+        db.session.commit()
+        flash("User deleted", "info")
+    except Exception:
+        db.session.rollback()
+        flash("Failed to delete user", "danger")
+    return redirect(request.referrer or url_for("admin_users"))
+
+
 @app.route("/tables/<int:table_id>/status", methods=["POST"])
 @login_required
 def update_table_status(table_id: int):
@@ -1931,7 +2609,8 @@ def update_table_status(table_id: int):
     table.is_occupied = status == "occupied"
     db.session.commit()
     flash_t("table_marked_occupied" if table.is_occupied else "table_marked_free", "success")
-    return redirect(url_for("dashboard_tables"))
+    # Keep the user on whichever page initiated the change; default to call-waiter.
+    return redirect(request.referrer or url_for("dashboard_call_waiter"))
 
 
 @app.route("/tables/<int:table_id>/delete", methods=["POST"])

@@ -1,0 +1,75 @@
+{% extends 'dashboard/layout.html' %}
+{% block panel %}
+<section class="dashboard-section" id="managers">
+    <div class="section-header">
+        <div>
+            <p class="muted">{{ t('collaborators') }}</p>
+            <h2>{{ t('collaborators') }}</h2>
+        </div>
+    </div>
+
+    <div class="grid">
+        {% for restaurant in restaurants %}
+        <article class="card" style="display:grid; gap:12px;">
+            <header class="card-header" style="align-items:flex-start;">
+                <div class="actions" style="gap:8px; order: 3;">
+                    <a class="btn" href="{{ url_for('manage_restaurant', restaurant_id=restaurant.id) }}">{{ t('manage') }}</a>
+                </div>
+                <div class="avatar">{{ restaurant.translated_name(lang)[:1] }}</div>
+                <div class="card-meta">
+                    <h3>{{ restaurant.translated_name(lang) }}</h3>
+                    <p class="muted">{{ restaurant.translated_description(lang) or t('no_description') }}</p>
+                </div>
+            </header>
+            <section class="mini-grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
+                <div class="mini-card">
+                    <div class="mini-card-header">
+                        <div>
+                            <p class="muted" style="margin:0 0 4px;">{{ t('collaborators') }}</p>
+                            <h4 style="margin:0;">{{ managers_by_rest.get(restaurant.id, [])|length }}</h4>
+                        </div>
+                    </div>
+                    <ul class="pill-list" style="padding-left: 0; margin-top:10px;">
+                        {% for manager in managers_by_rest.get(restaurant.id, []) %}
+                        <li style="display:flex; gap:8px; align-items:center; justify-content: space-between;">
+                            <span>{{ manager.user.username or manager.user.email }}</span>
+                            {% if restaurant.owner == current_user or is_admin %}
+                            <form method="post" action="{{ url_for('admin_remove_collaborator', link_id=manager.link_id) }}" style="margin:0;">
+                                <button class="btn danger small icon-only" type="button" data-confirm data-confirm-message="Remove manager?">
+                                    <span class="material-symbols-rounded">delete</span>
+                                </button>
+                            </form>
+                            {% endif %}
+                        </li>
+                        {% else %}
+                        <li class="muted">{{ t('no_users') if t('no_users') != 'no_users' else '' }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="mini-card">
+                    <div class="mini-card-header">
+                        <div>
+                            <p class="muted" style="margin:0 0 4px;">{{ t('collaborators') }}</p>
+                            <h4 style="margin:0;">{{ t('add_to_cart') if t('add_to_cart') != 'add_to_cart' else t('add_category') }}</h4>
+                        </div>
+                    </div>
+                    {% if restaurant.owner == current_user or is_admin %}
+                    <form method="post" action="{{ url_for('add_collaborator', restaurant_id=restaurant.id) }}" class="grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 8px;">
+                        <input class="input soft" type="text" name="username" placeholder="{{ t('username') if t('username') != 'username' else 'username' }}" autocomplete="off" list="username-suggest-{{ restaurant.id }}" data-username-suggest data-suggest-url="{{ url_for('api_username_suggestions') }}" required>
+                        <datalist id="username-suggest-{{ restaurant.id }}"></datalist>
+                        <input class="input soft" type="password" name="password" placeholder="password" minlength="8" autocomplete="new-password" required>
+                        <p class="muted" style="margin:4px 0 0;">{{ t('password_requirements') }}. {{ t('password_no_restaurant') if t('password_no_restaurant') != 'password_no_restaurant' else '' }} {{ 'Ex: Ab1!cd#9' }}</p>
+                        <button class="btn primary" type="submit">{{ t('save') }}</button>
+                    </form>
+                    {% else %}
+                    <p class="muted" style="margin-top:8px;">{{ t('collaborator_missing_fields') if t('collaborator_missing_fields') != 'collaborator_missing_fields' else '' }}</p>
+                    {% endif %}
+                </div>
+            </section>
+        </article>
+        {% else %}
+        <p class="muted">{{ t('no_restaurants') if t('no_restaurants') != 'no_restaurants' else '' }}</p>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

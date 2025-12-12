@@ -12,13 +12,13 @@
         <form method="post" class="stacked-form">
             {{ form.hidden_tag() }}
             <label>{{ t('email') }}
-                {{ form.email(class="input soft") }}
+                {{ form.email(class="input soft", minlength="3") }}
             </label>
             <label>{{ t('password') }}
-                {{ form.password(class="input soft") }}
+                {{ form.password(class="input soft", minlength="8", autocomplete="new-password") }}
             </label>
             <label>{{ t('confirm_password') }}
-                {{ form.confirm(class="input soft") }}
+                {{ form.confirm(class="input soft", minlength="8", autocomplete="new-password") }}
             </label>
             <button class="btn primary full" type="submit">{{ t('create_account') }}</button>
             <p class="muted center">{{ t('have_account') }} <a href="{{ url_for('login') }}">{{ t('login') }}</a></p>

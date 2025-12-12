@@ -1,11 +1,33 @@
 <section id="call-waiter" class="card dashboard-section">
     <div class="card-header">
         <div>
-            <h2>{{ t('call_waiter') }}</h2>
-            <p class="muted">{{ t('table_label') }}</p>
+            <h2>{{ t('registered_orders') if t('registered_orders') != 'registered_orders' else t('orders') }}</h2>
         </div>
     </div>
     <div class="dish-grid" data-new-requests>
         <p class="muted">{{ t('no_requests') if t('no_requests') != 'no_requests' else '' }}</p>
     </div>
 </section>
+
+{% for restaurant in restaurants %}
+{% set tables = tables_by_rest.get(restaurant.id, []) %}
+<section class="card dashboard-section" id="tables-{{ restaurant.id }}">
+    <div class="dish-grid">
+        {% for table in tables %}
+        <div class="dish-card">
+            <div class="dish-head">
+                <h4>{{ t('table_number') }}: {{ table.number }}</h4>
+                <form method="post" action="{{ url_for('update_table_status', table_id=table.id) }}" style="margin: 0;">
+                    <input type="hidden" name="status" value="{{ 'free' if table.is_occupied else 'occupied' }}">
+                    <button class="badge inline badge-toggle {{ 'occupied' if table.is_occupied else 'free' }}" type="submit">
+                        {{ t('table_occupied') if table.is_occupied else t('table_free') }}
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% else %}
+        <p class="muted">{{ t('no_tables') if t('no_tables') != 'no_tables' else '' }}</p>
+        {% endfor %}
+    </div>
+</section>
+{% endfor %}

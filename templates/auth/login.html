@@ -11,8 +11,8 @@
         <h2>{{ t('login') }}</h2>
         <form method="post" class="stacked-form">
             {{ form.hidden_tag() }}
-            <label>{{ t('email') }}
-                {{ form.email(class="input soft") }}
+            <label>{{ t('username_or_email') if t('username_or_email') != 'username_or_email' else t('email') }}
+                {{ form.identifier(class="input soft") }}
             </label>
             <label>{{ t('password') }}
                 {{ form.password(class="input soft") }}

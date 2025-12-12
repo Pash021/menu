@@ -1,6 +1,6 @@
-{% extends 'base.html' %}
+{% extends 'dashboard/layout.html' %}
 {% set current_theme = restaurant.theme if restaurant and restaurant.theme is not none else 'classic' %}
-{% block content %}
+{% block panel %}
 <section class="card">
     <div class="card-header">
         <div class="card-meta">
@@ -10,32 +10,29 @@
         </div>
         <div class="card-actions">
             <a class="btn" href="{{ url_for('restaurant_qr', restaurant_id=restaurant.id) }}">{{ t('qr_code') }}</a>
+            {% if restaurant.owner == current_user or is_admin %}
             <a class="btn" href="{{ url_for('edit_restaurant', restaurant_id=restaurant.id) }}">{{ t('restaurant_form_edit') }}</a>
+            {% endif %}
             <a class="btn primary" href="{{ url_for('create_category', restaurant_id=restaurant.id) }}">{{ t('add_category') }}</a>
         </div>
     </div>
     <div class="card-actions" style="justify-content: space-between;">
-        <span class="pill">{{ t('drag_hint') }}</span>
     </div>
 </section>
-
-<div class="section-header">
-    <h2>{{ t('categories') }}</h2>
-</div>
 
 <div class="drag-list" data-drag-root data-restaurant-id="{{ restaurant.id }}">
 {% for category in categories %}
 <article class="card drag-item" draggable="true" data-id="{{ category.id }}">
     <div class="card-header">
         <div class="drag-handle">⋮⋮</div>
-        <div>
-            <p class="muted">{{ t('order') }}: {{ loop.index }}</p>
+        <div class="category-meta">
             <h3>
                 {% if category.icon_name %}
                     <span class="material-symbols-rounded icon-font">{{ category.icon_name }}</span>
                 {% endif %}
                 {{ category.name }}
             </h3>
+            <p class="muted">{{ t('order') }}: {{ loop.index }}</p>
         </div>
         <div class="card-actions">
             <button class="btn" type="button" data-inline-toggle data-target="inline-form-{{ category.id }}">{{ t('add_dish') }}</button>

@@ -10,20 +10,21 @@
 </head>
 <body class="{{ body_class or '' }}{% if menu_page %} menu-page menu-theme-{{ menu_theme|default('classic') }}{% endif %}">
 <header class="topbar">
-    <div class="brand">
+    <a class="brand" href="{{ url_for('dashboard') }}">
         <span class="brand-mark">QR</span>
         <div>
             <div>AiNet Menu Hosting</div>
-            <p class="topbar-title">{{ title or t('dashboard') }}</p>
+            <p class="topbar-title">
+                {{ title or t('dashboard') }}
+                {% if manager_restaurant_name %}
+                    <span class="topbar-subtitle">{{ manager_restaurant_name }}</span>
+                {% endif %}
+                {% if current_role_label %}
+                    <span class="role-badge">{{ current_role_label }}</span>
+                {% endif %}
+            </p>
         </div>
-    </div>
-    <nav>
-        {% if current_user.is_authenticated %}
-            <a href="{{ url_for('dashboard') }}">{{ t('my_restaurants') }}</a>
-            {% if is_admin %}<a href="{{ url_for('admin_users') }}">{{ t('admin') }}</a>{% endif %}
-            <a href="{{ url_for('logout') }}">{{ t('logout') }}</a>
-        {% endif %}
-    </nav>
+    </a>
     <div class="topbar-actions">
         <div class="lang-switch inline">
             <label class="sr-only" for="lang-select-top">{{ t('language') }}</label>
@@ -40,11 +41,27 @@
 <main class="page">
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
-            <div class="flash-container">
+            <div class="flash-container sr-only">
                 {% for category, message in messages %}
                     <div class="flash {{ category }}">{{ message }}</div>
                 {% endfor %}
             </div>
+            <div class="flash-pop-container" data-flash-stack></div>
+            <script>
+                const flashMessages = {{ messages|tojson }};
+                const flashStack = document.querySelector('[data-flash-stack]');
+                if (flashStack && Array.isArray(flashMessages)) {
+                    flashMessages.forEach(([category, message]) => {
+                        const toast = document.createElement('div');
+                        toast.className = `flash-pop flash-${category || 'info'}`;
+                        toast.textContent = message;
+                        flashStack.appendChild(toast);
+                        requestAnimationFrame(() => toast.classList.add('visible'));
+                        setTimeout(() => toast.classList.remove('visible'), 3500);
+                        setTimeout(() => toast.remove(), 4000);
+                    });
+                }
+            </script>
         {% endif %}
     {% endwith %}
     {% block content %}{% endblock %}
