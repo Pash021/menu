@@ -45,13 +45,16 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text, inspect
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
 from flask_wtf import FlaskForm
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 from wtforms import BooleanField, DecimalField, FileField, IntegerField, PasswordField, SelectField, StringField, TextAreaField
 from wtforms.validators import DataRequired, Email, EqualTo, Length, NumberRange
 import qrcode
 from googletrans import Translator
+from PIL import Image, UnidentifiedImageError
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent
@@ -64,6 +67,11 @@ for folder in (UPLOAD_ROOT, LOGO_FOLDER, DISH_FOLDER, QR_FOLDER):
     folder.mkdir(parents=True, exist_ok=True)
 mimetypes.add_type("image/svg+xml", ".svg")
 mimetypes.add_type("application/pdf", ".pdf")
+
+# Upload limits (affects request max size for multipart/form-data)
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))
+ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp"}
 
 LANGUAGES = {
     "ru": "Русский",
@@ -1093,6 +1101,7 @@ app.config.update(
     SECRET_KEY=os.environ.get("SECRET_KEY", "dev-secret-change-me"),
     SQLALCHEMY_DATABASE_URI=os.environ.get("DATABASE_URL", DEFAULT_DB_URI),
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
+    MAX_CONTENT_LENGTH=MAX_UPLOAD_BYTES,
     UPLOAD_FOLDER=str(UPLOAD_ROOT),
     SQLALCHEMY_ENGINE_OPTIONS={
         "pool_pre_ping": True,
@@ -1475,7 +1484,7 @@ def api_username_suggestions():
     query = (request.args.get("q") or "").strip()
     sanitized = sanitize_username(query)
     if not sanitized:
-        return {"suggestions": []}
+        return api_success({"suggestions": []})
     suggestions: list[str] = []
     base = sanitized
     idx = 0
@@ -1485,10 +1494,19 @@ def api_username_suggestions():
         if not exists:
             suggestions.append(candidate)
         idx += 1
-    return {"suggestions": suggestions}
+    return api_success({"suggestions": suggestions})
 
 
 ensure_username_values()
+
+
+class ApiUploadError(Exception):
+    def __init__(self, code: str, message: str, *, status: int = 400, details=None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status = status
+        self.details = details
 
 
 def save_file(file_storage, folder: Path) -> str | None:
@@ -1499,6 +1517,63 @@ def save_file(file_storage, folder: Path) -> str | None:
         return None
     extension = Path(filename).suffix
     unique_name = f"{secrets.token_hex(8)}{extension}"
+    destination = folder / unique_name
+    file_storage.save(destination)
+    return str(destination.relative_to(UPLOAD_ROOT))
+
+
+def save_image_upload(file_storage, folder: Path, *, field_name: str = "file") -> str:
+    """Save a validated image (JPG/PNG/WEBP) into uploads and return relative path."""
+    if not file_storage or not getattr(file_storage, "filename", None):
+        raise ApiUploadError("VALIDATION_ERROR", f"Файл {field_name} обязателен", status=400)
+
+    filename = secure_filename(file_storage.filename)
+    if not filename:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректное имя файла", status=400)
+
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_IMAGE_EXTS:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Разрешены только JPG/PNG/WEBP",
+            status=415,
+            details={"allowed_exts": sorted(ALLOWED_IMAGE_EXTS)},
+        )
+
+    mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
+    if mimetype and mimetype not in ALLOWED_IMAGE_MIMES:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Разрешены только JPG/PNG/WEBP",
+            status=415,
+            details={"allowed_mimes": sorted(ALLOWED_IMAGE_MIMES)},
+        )
+
+    file_format = None
+    try:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        with Image.open(file_storage.stream) as img:
+            img.verify()
+            file_format = (img.format or "").upper()
+    except UnidentifiedImageError:
+        raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "Файл не является корректным изображением", status=415)
+    except Exception:
+        raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "Файл не является корректным изображением", status=415)
+    finally:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+
+    fmt_to_ext = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
+    normalized_ext = fmt_to_ext.get(file_format)
+    if not normalized_ext:
+        raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "Разрешены только JPG/PNG/WEBP", status=415)
+
+    unique_name = f"{secrets.token_hex(8)}{normalized_ext}"
     destination = folder / unique_name
     file_storage.save(destination)
     return str(destination.relative_to(UPLOAD_ROOT))
@@ -1791,9 +1866,730 @@ def enforce_blocked_users():
         endpoint = (request.endpoint or "").split(".")[0]
         if endpoint not in {"login", "logout"} and not endpoint.startswith("static"):
             logout_user()
+            if request.path.startswith("/api/"):
+                return api_error("AUTH_BLOCKED", "Пользователь заблокирован", status=403)
             flash_t("user_blocked_login", "danger")
             return redirect(url_for("login"))
     return None
+
+
+@login_manager.unauthorized_handler
+def unauthorized_handler():
+    if request.path.startswith("/api/"):
+        return api_error("AUTH_UNAUTHORIZED", "Не авторизован", status=401)
+    return redirect(url_for("login"))
+
+
+def api_success(data=None, meta=None, status: int = 200):
+    payload = {"data": data}
+    if meta is not None:
+        payload["meta"] = meta
+    return payload, status
+
+
+def api_error(code: str, message: str, status: int = 400, details=None):
+    err = {"code": code, "message": message}
+    if details is not None:
+        err["details"] = details
+    return {"error": err}, status
+
+
+def is_api_request() -> bool:
+    return request.path.startswith("/api/")
+
+
+@app.errorhandler(HTTPException)
+def handle_http_exception(err: HTTPException):
+    if not is_api_request():
+        return err
+
+    status = int(getattr(err, "code", 500) or 500)
+    default = {
+        400: ("BAD_REQUEST", "Некорректный запрос"),
+        401: ("AUTH_UNAUTHORIZED", "Не авторизован"),
+        403: ("FORBIDDEN", "Доступ запрещён"),
+        404: ("NOT_FOUND", "Не найдено"),
+        405: ("METHOD_NOT_ALLOWED", "Метод не поддерживается"),
+        409: ("CONFLICT", "Конфликт данных"),
+        413: ("PAYLOAD_TOO_LARGE", "Слишком большой файл"),
+        415: ("UNSUPPORTED_MEDIA_TYPE", "Неподдерживаемый тип данных"),
+    }.get(status, ("HTTP_ERROR", "Ошибка"))
+
+    code, fallback_message = default
+    description = getattr(err, "description", None)
+    message = description if isinstance(description, str) and description else fallback_message
+    return api_error(code, message, status=status)
+
+
+@app.errorhandler(Exception)
+def handle_unhandled_exception(err: Exception):
+    if not is_api_request():
+        raise err
+    app.logger.exception("Unhandled API error: %s", err)
+    return api_error("INTERNAL_ERROR", "Внутренняя ошибка сервера", status=500)
+
+
+def api_user_dict(u: User) -> dict:
+    return {
+        "id": u.id,
+        "email": u.email,
+        "username": u.username,
+        "role": u.role,
+        "is_blocked": bool(getattr(u, "is_blocked", False)),
+    }
+
+
+def api_restaurant_dict(r: Restaurant) -> dict:
+    return {
+        "id": r.id,
+        "name": r.name,
+        "description": r.description,
+        "slug": r.slug,
+        "logo_url": r.logo_url(),
+        "theme": r.theme,
+        "menu_font": r.menu_font,
+    }
+
+
+def api_category_dict(c: Category) -> dict:
+    return {
+        "id": c.id,
+        "name": c.name,
+        "icon_name": c.icon_name,
+        "sort_order": c.sort_order,
+        "restaurant_id": c.restaurant_id,
+    }
+
+
+def api_dish_dict(d: Dish) -> dict:
+    return {
+        "id": d.id,
+        "name": d.name,
+        "description": d.description,
+        "price": float(d.price),
+        "currency": d.currency,
+        "available": bool(d.available),
+        "is_spicy": bool(d.is_spicy),
+        "is_vegan": bool(d.is_vegan),
+        "image_url": d.image_url(),
+        "category_id": d.category_id,
+    }
+
+
+def api_table_dict(t: DiningTable) -> dict:
+    return {
+        "id": t.id,
+        "number": t.number,
+        "is_occupied": bool(t.is_occupied),
+        "restaurant_id": t.restaurant_id,
+    }
+
+
+def api_parse_int(v, default=None):
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def api_parse_bool(v, default=False):
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    return s in ("1", "true", "yes", "on")
+
+
+def api_page_args():
+    page = max(1, api_parse_int(request.args.get("page"), 1) or 1)
+    page_size = api_parse_int(request.args.get("page_size"), 20) or 20
+    page_size = min(max(page_size, 1), 100)
+    return page, page_size
+
+
+@app.route("/api/auth/me")
+def api_auth_me():
+    if not current_user.is_authenticated:
+        return api_error("AUTH_UNAUTHORIZED", "Не авторизован", status=401)
+    return api_success({"user": api_user_dict(current_user)})
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_auth_login():
+    data = request.get_json(silent=True) or {}
+    identifier = (data.get("identifier") or "").strip().lower()
+    password = data.get("password") or ""
+    if not identifier or not password:
+        return api_error("VALIDATION_ERROR", "Нужно указать identifier и password", status=400)
+
+    login_with_username = "@" not in identifier
+    user = (
+        User.query.filter_by(username=identifier).first()
+        if login_with_username
+        else User.query.filter_by(email=identifier).first()
+    )
+
+    if not user or not user.check_password(password):
+        return api_error("AUTH_BAD_CREDENTIALS", "Неверный логин или пароль", status=401)
+    if getattr(user, "is_blocked", False):
+        return api_error("AUTH_BLOCKED", "Пользователь заблокирован", status=403)
+
+    if not is_admin_user(user):
+        desired_role = "manager" if login_with_username else "owner"
+        if user.role != desired_role:
+            user.role = desired_role
+            db.session.commit()
+
+    login_user(user)
+    return api_success({"user": api_user_dict(user)})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+@login_required
+def api_auth_logout():
+    logout_user()
+    return api_success({"ok": True})
+
+
+# Backward-compatible aliases (old paths)
+@app.route("/api/me")
+def api_me():
+    return api_auth_me()
+
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    return api_auth_login()
+
+
+@app.route("/api/logout", methods=["POST"])
+@login_required
+def api_logout():
+    return api_auth_logout()
+
+
+@app.route("/api/admin/restaurants")
+@login_required
+def api_admin_restaurants_list():
+    q = (request.args.get("q") or "").strip()
+    page, page_size = api_page_args()
+
+    if is_admin_user(current_user):
+        query = Restaurant.query
+    else:
+        allowed = get_user_restaurants(current_user)
+        allowed_ids = [r.id for r in allowed]
+        if not allowed_ids:
+            return api_success({"items": [], "total": 0, "page": page, "page_size": page_size})
+        query = Restaurant.query.filter(Restaurant.id.in_(allowed_ids))
+
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(Restaurant.name.ilike(like), Restaurant.slug.ilike(like)))
+
+    total = query.count()
+    items = (
+        query.order_by(Restaurant.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return api_success({"items": [api_restaurant_dict(r) for r in items], "total": total, "page": page, "page_size": page_size})
+
+
+@app.route("/api/admin/restaurants", methods=["POST"])
+@login_required
+def api_admin_restaurants_create():
+    if is_manager_only(current_user) and not is_admin_user(current_user):
+        return api_error("FORBIDDEN", "Недостаточно прав для создания ресторана", status=403)
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    description = (data.get("description") or "").strip() or None
+    slug_raw = (data.get("slug") or "").strip()
+
+    theme = (data.get("theme") or "classic").strip()
+    menu_font = (data.get("menu_font") or "serif").strip()
+
+    if not name:
+        return api_error("VALIDATION_ERROR", "Поле name обязательно", status=400)
+
+    slug_value = unique_slug(slug_raw or name)
+
+    restaurant = Restaurant(
+        name=name,
+        description=description,
+        theme=theme,
+        menu_font=menu_font,
+        slug=slug_value,
+        owner=current_user,
+    )
+    db.session.add(restaurant)
+    db.session.commit()
+    return api_success({"restaurant": api_restaurant_dict(restaurant)}, status=201)
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>")
+@login_required
+def api_admin_restaurant_get(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+    return api_success({"restaurant": api_restaurant_dict(restaurant)})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>", methods=["PATCH"])
+@login_required
+def api_admin_restaurant_update(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    data = request.get_json(silent=True) or {}
+    if "name" in data:
+        restaurant.name = (data.get("name") or "").strip() or restaurant.name
+    if "description" in data:
+        restaurant.description = (data.get("description") or "").strip() or None
+    if "theme" in data:
+        restaurant.theme = (data.get("theme") or "").strip() or restaurant.theme
+    if "menu_font" in data:
+        restaurant.menu_font = (data.get("menu_font") or "").strip() or restaurant.menu_font
+
+    db.session.commit()
+    return api_success({"restaurant": api_restaurant_dict(restaurant)})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/logo", methods=["POST"])
+@login_required
+def api_admin_restaurant_logo(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+    file = request.files.get("logo")
+    try:
+        restaurant.logo_filename = save_image_upload(file, LOGO_FOLDER, field_name="logo")
+    except ApiUploadError as e:
+        return api_error(e.code, e.message, status=e.status, details=e.details)
+    db.session.commit()
+    return api_success({"restaurant": api_restaurant_dict(restaurant)})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/categories")
+@login_required
+def api_admin_categories_list(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    items = (
+        Category.query.filter_by(restaurant_id=restaurant.id)
+        .order_by(Category.sort_order, Category.name)
+        .all()
+    )
+    return api_success({"items": [api_category_dict(c) for c in items]})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/categories", methods=["POST"])
+@login_required
+def api_admin_categories_create(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    icon_name = (data.get("icon_name") or "").strip() or None
+    if not name:
+        return api_error("VALIDATION_ERROR", "Поле name обязательно", status=400)
+
+    max_sort = (
+        db.session.query(db.func.max(Category.sort_order))
+        .filter_by(restaurant_id=restaurant.id)
+        .scalar()
+        or 0
+    )
+    cat = Category(
+        name=name,
+        icon_name=icon_name,
+        restaurant_id=restaurant.id,
+        sort_order=max_sort + 1,
+    )
+    db.session.add(cat)
+    db.session.commit()
+    return api_success({"category": api_category_dict(cat)}, status=201)
+
+
+@app.route("/api/admin/categories/<int:category_id>", methods=["PATCH"])
+@login_required
+def api_admin_category_update(category_id: int):
+    cat = db.session.get(Category, category_id)
+    if not cat or not has_restaurant_access(cat.restaurant):
+        return api_error("NOT_FOUND", "Категория не найдена", status=404)
+
+    data = request.get_json(silent=True) or {}
+    if "name" in data:
+        cat.name = (data.get("name") or "").strip() or cat.name
+    if "icon_name" in data:
+        cat.icon_name = (data.get("icon_name") or "").strip() or None
+    db.session.commit()
+    return api_success({"category": api_category_dict(cat)})
+
+
+@app.route("/api/admin/categories/<int:category_id>", methods=["DELETE"])
+@login_required
+def api_admin_category_delete(category_id: int):
+    cat = db.session.get(Category, category_id)
+    if not cat or not has_restaurant_access(cat.restaurant):
+        return api_error("NOT_FOUND", "Категория не найдена", status=404)
+    db.session.delete(cat)
+    db.session.commit()
+    return api_success({"ok": True})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/dishes")
+@login_required
+def api_admin_dishes_list(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    q = (request.args.get("q") or "").strip()
+    page, page_size = api_page_args()
+
+    query = Dish.query.join(Category).filter(Category.restaurant_id == restaurant.id)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(Dish.name.ilike(like), Dish.description.ilike(like)))
+
+    total = query.count()
+    items = (
+        query.order_by(Dish.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return api_success({"items": [api_dish_dict(d) for d in items], "total": total, "page": page, "page_size": page_size})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/dishes", methods=["POST"])
+@login_required
+def api_admin_dishes_create(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    form = request.form or {}
+    name = (form.get("name") or "").strip()
+    description = (form.get("description") or "").strip() or None
+    price = form.get("price")
+    currency = (form.get("currency") or "AMD").strip()
+    category_id = api_parse_int(form.get("category_id"))
+
+    if not name or price is None or not category_id:
+        return api_error("VALIDATION_ERROR", "Нужно указать name, price и category_id", status=400)
+
+    category = db.session.get(Category, category_id)
+    if not category or category.restaurant_id != restaurant.id:
+        return api_error("VALIDATION_ERROR", "Некорректная категория", status=400)
+
+    image_file = request.files.get("image")
+    image_filename = None
+    if image_file:
+        try:
+            image_filename = save_image_upload(image_file, DISH_FOLDER, field_name="image")
+        except ApiUploadError as e:
+            return api_error(e.code, e.message, status=e.status, details=e.details)
+
+    try:
+        price_value = float(price)
+    except Exception:
+        return api_error("VALIDATION_ERROR", "Некорректная цена", status=400)
+
+    dish = Dish(
+        name=name,
+        description=description,
+        price=price_value,
+        currency=currency,
+        category_id=category.id,
+        available=api_parse_bool(form.get("available"), True),
+        is_spicy=api_parse_bool(form.get("is_spicy"), False),
+        is_vegan=api_parse_bool(form.get("is_vegan"), False),
+        image_filename=image_filename,
+    )
+    db.session.add(dish)
+    db.session.commit()
+    return api_success({"dish": api_dish_dict(dish)}, status=201)
+
+
+@app.route("/api/admin/dishes/<int:dish_id>", methods=["PATCH"])
+@login_required
+def api_admin_dish_update(dish_id: int):
+    dish = db.session.get(Dish, dish_id)
+    if not dish or not has_restaurant_access(dish.category.restaurant):
+        return api_error("NOT_FOUND", "Блюдо не найдено", status=404)
+
+    form = request.form or {}
+
+    if "name" in form:
+        dish.name = (form.get("name") or "").strip() or dish.name
+    if "description" in form:
+        dish.description = (form.get("description") or "").strip() or None
+    if "price" in form:
+        try:
+            dish.price = float(form.get("price"))
+        except Exception:
+            pass
+    if "currency" in form:
+        dish.currency = (form.get("currency") or dish.currency).strip()
+    if "category_id" in form:
+        new_cat_id = api_parse_int(form.get("category_id"))
+        new_cat = db.session.get(Category, new_cat_id) if new_cat_id else None
+        if new_cat and new_cat.restaurant_id == dish.category.restaurant_id:
+            dish.category_id = new_cat.id
+
+    if "available" in form:
+        dish.available = api_parse_bool(form.get("available"), True)
+    if "is_spicy" in form:
+        dish.is_spicy = api_parse_bool(form.get("is_spicy"), False)
+    if "is_vegan" in form:
+        dish.is_vegan = api_parse_bool(form.get("is_vegan"), False)
+
+    image_file = request.files.get("image")
+    if image_file:
+        try:
+            dish.image_filename = save_image_upload(image_file, DISH_FOLDER, field_name="image")
+        except ApiUploadError as e:
+            return api_error(e.code, e.message, status=e.status, details=e.details)
+
+    db.session.commit()
+    return api_success({"dish": api_dish_dict(dish)})
+
+
+@app.route("/api/admin/dishes/<int:dish_id>", methods=["DELETE"])
+@login_required
+def api_admin_dish_delete(dish_id: int):
+    dish = db.session.get(Dish, dish_id)
+    if not dish or not has_restaurant_access(dish.category.restaurant):
+        return api_error("NOT_FOUND", "Блюдо не найдено", status=404)
+    db.session.delete(dish)
+    db.session.commit()
+    return api_success({"ok": True})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/tables")
+@login_required
+def api_admin_tables_list(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    items = (
+        DiningTable.query.filter_by(restaurant_id=restaurant.id)
+        .order_by(DiningTable.number)
+        .all()
+    )
+    return api_success({"items": [api_table_dict(t) for t in items]})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/tables", methods=["POST"])
+@login_required
+def api_admin_tables_create(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    data = request.get_json(silent=True) or {}
+    number = api_parse_int(data.get("number"))
+    if not number:
+        return api_error("VALIDATION_ERROR", "Поле number обязательно", status=400)
+
+    existing = DiningTable.query.filter_by(restaurant_id=restaurant.id, number=number).first()
+    if existing:
+        return api_error("CONFLICT", "Стол с таким номером уже существует", status=409)
+
+    tbl = DiningTable(number=number, restaurant_id=restaurant.id, is_occupied=False)
+    db.session.add(tbl)
+    db.session.commit()
+    return api_success({"table": api_table_dict(tbl)}, status=201)
+
+
+@app.route("/api/admin/tables/<int:table_id>", methods=["PATCH"])
+@login_required
+def api_admin_table_update(table_id: int):
+    tbl = db.session.get(DiningTable, table_id)
+    if not tbl or not has_restaurant_access(tbl.restaurant):
+        return api_error("NOT_FOUND", "Стол не найден", status=404)
+
+    data = request.get_json(silent=True) or {}
+    if "is_occupied" in data:
+        tbl.is_occupied = bool(data.get("is_occupied"))
+    if "number" in data:
+        n = api_parse_int(data.get("number"))
+        if n:
+            tbl.number = n
+
+    db.session.commit()
+    return api_success({"table": api_table_dict(tbl)})
+
+
+@app.route("/api/admin/tables/<int:table_id>", methods=["DELETE"])
+@login_required
+def api_admin_table_delete(table_id: int):
+    tbl = db.session.get(DiningTable, table_id)
+    if not tbl or not has_restaurant_access(tbl.restaurant):
+        return api_error("NOT_FOUND", "Стол не найден", status=404)
+    db.session.delete(tbl)
+    db.session.commit()
+    return api_success({"ok": True})
+
+
+@app.route("/api/admin/users")
+@login_required
+def api_admin_users_list():
+    if not is_admin_user(current_user):
+        return api_error("FORBIDDEN", "Доступ запрещён", status=403)
+
+    page, page_size = api_page_args()
+    query = User.query.order_by(User.id.desc())
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return api_success({"items": [api_user_dict(u) for u in items], "total": total, "page": page, "page_size": page_size})
+
+
+def resolve_public_lang_arg() -> str:
+    lang = request.args.get("lang") or DEFAULT_LANG
+    if lang not in LANGUAGES:
+        lang = DEFAULT_LANG
+    return lang
+
+
+def public_restaurant_payload(restaurant: Restaurant, lang: str) -> dict:
+    return {
+        "id": restaurant.id,
+        "slug": restaurant.slug,
+        "name": restaurant.translated_name(lang),
+        "description": restaurant.translated_description(lang),
+        "logo_url": restaurant.logo_url(),
+        "theme": restaurant.theme,
+        "menu_font": restaurant.menu_font,
+    }
+
+
+def public_categories_payload(restaurant: Restaurant, lang: str) -> list[dict]:
+    categories = (
+        Category.query.options(joinedload(Category.dishes))
+        .filter_by(restaurant_id=restaurant.id)
+        .order_by(Category.sort_order, Category.name)
+        .all()
+    )
+
+    def pub_dish(d: Dish) -> dict:
+        return {
+            "id": d.id,
+            "name": d.translated_name(lang),
+            "description": d.translated_description(lang),
+            "price": float(d.price),
+            "currency": d.currency,
+            "available": bool(d.available),
+            "is_spicy": bool(d.is_spicy),
+            "is_vegan": bool(d.is_vegan),
+            "image_url": d.image_url(),
+            "category_id": d.category_id,
+        }
+
+    def pub_cat(c: Category) -> dict:
+        return {
+            "id": c.id,
+            "name": c.translated_name(lang),
+            "icon_name": c.icon_name,
+            "dishes": [pub_dish(d) for d in (c.dishes or [])],
+        }
+
+    return [pub_cat(c) for c in categories]
+
+
+def public_table_payload(restaurant: Restaurant):
+    table_number = api_parse_int(request.args.get("table"))
+    if not table_number:
+        return None
+    table_obj = DiningTable.query.filter_by(restaurant_id=restaurant.id, number=table_number).first()
+    if not table_obj:
+        return None
+    return {"number": table_obj.number, "is_occupied": bool(table_obj.is_occupied)}
+
+
+@app.route("/api/public/restaurant/<slug>")
+def api_public_restaurant(slug: str):
+    lang = resolve_public_lang_arg()
+    restaurant = Restaurant.query.filter_by(slug=slug).first()
+    if not restaurant:
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+    return api_success({"restaurant": public_restaurant_payload(restaurant, lang)})
+
+
+@app.route("/api/public/restaurant/<slug>/menu")
+def api_public_restaurant_menu(slug: str):
+    lang = resolve_public_lang_arg()
+    restaurant = Restaurant.query.filter_by(slug=slug).first()
+    if not restaurant:
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+    return api_success(
+        {
+            "categories": public_categories_payload(restaurant, lang),
+            "table": public_table_payload(restaurant),
+        }
+    )
+
+
+@app.route("/api/public/restaurants/<slug>/menu")
+def api_public_menu(slug: str):
+    lang = resolve_public_lang_arg()
+    restaurant = Restaurant.query.filter_by(slug=slug).first()
+    if not restaurant:
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    return api_success(
+        {
+            "restaurant": public_restaurant_payload(restaurant, lang),
+            "table": public_table_payload(restaurant),
+            "categories": public_categories_payload(restaurant, lang),
+        }
+    )
+
+
+@app.route("/api/public/qr/<code>")
+def api_public_qr(code: str):
+    """Minimal QR resolver for SPA.
+
+    Supported formats:
+    - table_<id>  -> resolves DiningTable.id
+    - <number>    -> resolves DiningTable.id (numeric)
+    - <slug>--<table_number> -> resolves by restaurant slug + table number
+    """
+    code = (code or "").strip()
+    if not code:
+        return api_error("NOT_FOUND", "QR код не найден", status=404)
+
+    table_obj = None
+    if code.startswith("table_"):
+        table_id = api_parse_int(code.replace("table_", "", 1))
+        if table_id:
+            table_obj = db.session.get(DiningTable, table_id)
+    elif code.isdigit():
+        table_obj = db.session.get(DiningTable, int(code))
+    elif "--" in code:
+        slug, table_str = code.rsplit("--", 1)
+        table_number = api_parse_int(table_str)
+        if slug and table_number:
+            restaurant = Restaurant.query.filter_by(slug=slug).first()
+            if restaurant:
+                table_obj = DiningTable.query.filter_by(restaurant_id=restaurant.id, number=table_number).first()
+
+    if not table_obj or not table_obj.restaurant:
+        return api_error("NOT_FOUND", "QR код не найден", status=404)
+
+    return api_success({"slug": table_obj.restaurant.slug, "table": table_obj.number})
 
 
 @app.context_processor
@@ -1906,6 +2702,9 @@ def uploaded_file(filename):
 
 @app.route("/")
 def home():
+    spa = try_serve_react_index()
+    if spa is not None:
+        return spa
     if current_user.is_authenticated:
         if is_manager_only(current_user):
             return redirect(url_for("dashboard_call_waiter"))
@@ -1939,8 +2738,11 @@ def register():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    spa = try_serve_react_index()
+    if spa is not None and request.method == "GET":
+        return spa
     if current_user.is_authenticated:
-        return redirect(url_for("dashboard"))
+        return redirect("/admin" if react_build_exists() else url_for("dashboard"))
     form = LoginForm()
     if form.validate_on_submit():
         identifier = (form.identifier.data or "").strip().lower()
@@ -1961,7 +2763,7 @@ def login():
                     user.role = desired_role
                     db.session.commit()
             login_user(user)
-            return redirect(url_for("dashboard"))
+            return redirect("/admin" if react_build_exists() else url_for("dashboard"))
     return render_template("auth/login.html", form=form)
 
 
@@ -2105,7 +2907,7 @@ def api_my_call_requests():
         .limit(100)
         .all()
     )
-    return {"requests": [r.as_dict() for r in requests]}
+    return api_success({"requests": [r.as_dict() for r in requests]})
 
 
 @app.route("/api/call_requests/<int:req_id>/seen", methods=["POST"])
@@ -2116,7 +2918,7 @@ def api_mark_request_seen(req_id: int):
         abort(404)
     req.status = "seen"
     db.session.commit()
-    return {"status": "ok"}
+    return api_success({"ok": True})
 
 
 @app.route("/api/call_requests/<int:req_id>/status", methods=["POST"])
@@ -2131,10 +2933,10 @@ def api_update_request_status(req_id: int):
         abort(400)
     req.status = status
     db.session.commit()
-    return {"status": "ok"}
+    return api_success({"ok": True})
 
 
-@app.route("/admin/users")
+@app.route("/legacy/admin/users")
 @login_required
 @admin_required
 def admin_users():
@@ -2153,7 +2955,7 @@ def admin_users():
     )
 
 
-@app.route("/admin/restaurants")
+@app.route("/legacy/admin/restaurants")
 @login_required
 @admin_required
 def admin_restaurants():
@@ -2642,6 +3444,11 @@ def table_qr(table_id: int):
 
 @app.route("/menu/<slug>/")
 def public_menu(slug: str):
+    if react_build_exists():
+        table_number = api_parse_int(request.args.get("table"))
+        if table_number:
+            return redirect(f"/r/{slug}/table/{table_number}")
+        return redirect(f"/r/{slug}")
     restaurant = Restaurant.query.filter_by(slug=slug).first_or_404()
     table_param = request.args.get("table")
     active_table_number = None
@@ -2666,21 +3473,22 @@ def public_menu(slug: str):
 
 @app.route("/api/call_waiter", methods=["POST"])
 def api_call_waiter():
-    data = request.get_json(force=True, silent=True) or {}
-    slug = data.get("slug")
+    data = request.get_json(silent=True) or {}
+    slug = (data.get("slug") or "").strip()
     table = data.get("table")
     items = data.get("items", [])
+    if not slug or table is None:
+        return api_error("VALIDATION_ERROR", "Нужно указать slug и table", status=400)
     restaurant = Restaurant.query.filter_by(slug=slug).first()
-    if not restaurant or not table:
-        abort(400)
-    try:
-        table_number = int(table)
-    except Exception:
-        abort(400)
+    if not restaurant:
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+    table_number = api_parse_int(table)
+    if not table_number:
+        return api_error("VALIDATION_ERROR", "Некорректный table", status=400)
     req = CallRequest(restaurant_id=restaurant.id, table_number=table_number, items=items)
     db.session.add(req)
     db.session.commit()
-    return {"status": "ok"}
+    return api_success({"ok": True}, status=201)
 
 
 @app.route("/set-lang")
@@ -2690,6 +3498,55 @@ def set_lang():
         session["lang"] = lang
     ref = request.referrer or url_for("home")
     return redirect(ref)
+
+
+@app.route("/app/")
+@app.route("/app/<path:path>")
+def react_spa(path: str = ""):
+    return serve_react_index_or_404()
+
+
+@app.route("/admin")
+@app.route("/admin/<path:path>")
+def react_admin(path: str = ""):
+    return serve_react_index_or_404()
+
+
+@app.route("/qr")
+@app.route("/qr/<path:path>")
+def react_qr(path: str = ""):
+    return serve_react_index_or_404()
+
+
+@app.route("/r")
+@app.route("/r/<path:path>")
+def react_public(path: str = ""):
+    return serve_react_index_or_404()
+
+
+def react_build_exists() -> bool:
+    react_dir = BASE_DIR / "static" / "react"
+    return (react_dir / "index.html").is_file()
+
+
+def try_serve_react_index():
+    """Return index.html for SPA routes, or None if build missing / not HTML request."""
+    if not react_build_exists():
+        return None
+    if request.method not in {"GET", "HEAD"}:
+        return None
+    accept = (request.headers.get("Accept") or "").lower()
+    if "text/html" not in accept and "*/*" not in accept:
+        return None
+    react_dir = BASE_DIR / "static" / "react"
+    return send_from_directory(str(react_dir), "index.html")
+
+
+def serve_react_index_or_404():
+    resp = try_serve_react_index()
+    if resp is not None:
+        return resp
+    return "React build not found. Run: cd frontend && npm run build", 404
 
 
 with app.app_context():
