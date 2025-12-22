@@ -10,6 +10,7 @@ import { I18nProvider } from "./lib/i18n";
 import { AuthProvider } from "./lib/auth";
 import { ActiveRestaurantProvider } from "./lib/activeRestaurant";
 import { Toaster } from "./components/Toaster";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -42,7 +43,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           <AuthProvider>
             <ActiveRestaurantProvider>
               <BrowserRouter basename={basename}>
-                <App />
+                <ErrorBoundary>
+                  <App />
+                </ErrorBoundary>
               </BrowserRouter>
               <Toaster />
             </ActiveRestaurantProvider>

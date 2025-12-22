@@ -9,7 +9,7 @@ import { useForm } from "react-hook-form";
 import { createRestaurant, listRestaurants, uploadRestaurantLogo } from "@/api/restaurants";
 import { getApiErrorMessage } from "@/api/client";
 import { useI18n } from "@/lib/i18n";
-import { validateImageFile } from "@/lib/uploads";
+import { validateLogoFile } from "@/lib/uploads";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { EmptyState } from "@/components/EmptyState";
 import { LoadingSkeleton } from "@/components/LoadingSkeleton";
@@ -192,7 +192,7 @@ export default function AdminRestaurantsPage() {
                   <TableCell className="text-muted-foreground">{r.slug}</TableCell>
                   <TableCell className="text-right">
                     <Button asChild variant="outline" size="sm" className="gap-2">
-                      <Link to={`/admin/restaurants/${r.id}/manage`}>
+                      <Link to={`/admin/restaurants/${r.id}/settings`}>
                         <Settings2 className="h-4 w-4" />
                         {t("admin.manage.title")}
                       </Link>
@@ -264,10 +264,10 @@ export default function AdminRestaurantsPage() {
               </label>
               <Input
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/svg+xml,image/png,image/jpeg,image/webp"
                 onChange={(e) => {
                   const file = e.target.files?.[0] ?? null;
-                  const error = validateImageFile(file);
+                  const error = validateLogoFile(file);
                   if (error) {
                     toast.error(error);
                     e.target.value = "";

@@ -1,0 +1,52 @@
+.page {
+  padding-bottom: 12px;
+}
+
+.pills {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 520px;
+  margin-inline: auto;
+}
+
+.grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  max-width: 720px;
+  margin-inline: auto;
+}
+
+.carousel {
+  margin-top: 14px;
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 4px 2px 12px;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+
+.empty {
+  border-radius: var(--menu-radius-card);
+  background: var(--menu-surface);
+  border: 1px solid var(--menu-border);
+  box-shadow: var(--menu-shadow-soft);
+  padding: 18px 16px;
+  text-align: center;
+  font-weight: 900;
+  color: var(--menu-text-primary);
+}
+
+@media (min-width: 640px) {
+  .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .carousel {
+    padding: 6px 0 14px;
+  }
+}

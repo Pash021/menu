@@ -1,0 +1,30 @@
+.shell {
+  --menu-background: #fff4e6;
+  --menu-accent: #f39a1e;
+  --menu-accent-secondary: #ffb64d;
+  --menu-accent-tertiary: #ffcf7d;
+  --menu-category-button: var(--menu-accent);
+  --menu-surface: rgba(255, 255, 255, 0.68);
+  --menu-border: rgba(12, 7, 3, 0.1);
+  --menu-text-primary: rgba(12, 7, 3, 0.96);
+  --menu-text-muted: rgba(12, 7, 3, 0.55);
+  --menu-shadow: 0 14px 40px rgba(12, 7, 3, 0.14);
+  --menu-shadow-soft: 0 10px 26px rgba(12, 7, 3, 0.12);
+  --menu-radius-card: 22px;
+  --menu-radius-hero: 28px;
+  --menu-success: #25d366;
+  --menu-glass-blur: 12px;
+  --menu-card-glow: 0 0 0 rgba(0,0,0,0);
+
+  --menu-meal-1: #f39a1e;
+  --menu-meal-2: #9b5de5;
+  --menu-meal-3: #f15bb5;
+  --menu-meal-4: #00bbf9;
+  --menu-meal-5: #00d6b5;
+
+  min-height: 100dvh;
+  padding-bottom: calc(28px + env(safe-area-inset-bottom));
+  font-family: var(--menu-font-body, ui-serif, Georgia, Cambria, "Times New Roman", Times, serif);
+  background: var(--menu-background);
+  color: var(--menu-text-primary);
+}

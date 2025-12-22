@@ -1,0 +1,53 @@
+.page {
+  position: relative;
+  min-height: 100dvh;
+  touch-action: auto;
+}
+
+.page[data-gestures="1"] {
+  touch-action: pan-y;
+  overscroll-behavior-x: contain;
+}
+
+.inner {
+  min-height: 100dvh;
+}
+
+.crease,
+.edge {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.crease {
+  mix-blend-mode: multiply;
+  background: linear-gradient(
+    90deg,
+    rgba(12, 7, 3, 0) 0%,
+    rgba(12, 7, 3, 0.18) 47%,
+    rgba(12, 7, 3, 0) 54%,
+    rgba(12, 7, 3, 0.12) 63%,
+    rgba(12, 7, 3, 0) 100%
+  );
+}
+
+.edge {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.0) 0%,
+    rgba(255, 255, 255, 0.10) 44%,
+    rgba(255, 255, 255, 0.0) 52%,
+    rgba(255, 255, 255, 0.06) 62%,
+    rgba(255, 255, 255, 0.0) 100%
+  );
+}
+
+[data-direction="forward"] .edge {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.0) 0%, rgba(255, 255, 255, 0.08) 62%, rgba(255, 255, 255, 0.0) 100%);
+}
+
+[data-direction="back"] .edge {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.0) 0%, rgba(255, 255, 255, 0.08) 38%, rgba(255, 255, 255, 0.0) 100%);
+}

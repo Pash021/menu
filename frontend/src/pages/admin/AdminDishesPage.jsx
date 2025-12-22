@@ -5,7 +5,17 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { createDish, deleteDish, listCategories, listDishes, updateDish } from "@/api/restaurants";
+import {
+  createDish,
+  deleteDish,
+  getDishImageStatus,
+  listCategories,
+  listDishes,
+  requestDishRemoveBg,
+  updateDish,
+  useDishOriginalImage,
+  useDishProcessedImage,
+} from "@/api/restaurants";
 import { getApiErrorMessage } from "@/api/client";
 import { useActiveRestaurant } from "@/lib/activeRestaurant";
 import { useI18n } from "@/lib/i18n";
@@ -21,6 +31,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Pagination } from "@/components/ui/pagination";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TranslationEditor } from "@/components/admin/translations/TranslationEditor";
 
 const schema = z.object({
   name: z.string().min(1),
@@ -176,6 +187,46 @@ export default function AdminDishesPage() {
     </div>
   );
 
+  const dishImageQuery = useQuery({
+    queryKey: ["dishImage", editing?.id],
+    queryFn: () => getDishImageStatus(editing.id),
+    enabled: Boolean(editing?.id && modalOpen),
+    retry: false,
+    refetchInterval: (query) => {
+      const status = query?.state?.data?.status;
+      return status === "queued" || status === "processing" ? 1500 : false;
+    },
+  });
+
+  const removeBgMutation = useMutation({
+    mutationFn: () => requestDishRemoveBg(editing.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["dishImage", editing?.id] });
+      toast.success(t("toast.updated"));
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err)),
+  });
+
+  const useOriginalMutation = useMutation({
+    mutationFn: () => useDishOriginalImage(editing.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["dishImage", editing?.id] });
+      await queryClient.invalidateQueries({ queryKey: ["dishes"] });
+      toast.success(t("toast.updated"));
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err)),
+  });
+
+  const useProcessedMutation = useMutation({
+    mutationFn: () => useDishProcessedImage(editing.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["dishImage", editing?.id] });
+      await queryClient.invalidateQueries({ queryKey: ["dishes"] });
+      toast.success(t("toast.updated"));
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err)),
+  });
+
   if (!restaurantId) {
     return (
       <EmptyState
@@ -311,7 +362,7 @@ export default function AdminDishesPage() {
           }
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain">
           <DialogHeader>
             <DialogTitle>{editing ? "Редактировать блюдо" : "Новое блюдо"}</DialogTitle>
           </DialogHeader>
@@ -394,6 +445,59 @@ export default function AdminDishesPage() {
               </div>
             ) : null}
 
+            {editing?.id ? (
+              <div className="rounded-2xl border bg-card p-4">
+                <div className="text-sm font-semibold">{t("dish.imageProcessing.title")}</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {dishImageQuery.data?.status ? `${t("dish.imageProcessing.status")}: ${dishImageQuery.data.status}` : "—"}
+                  {dishImageQuery.data?.error ? ` · ${dishImageQuery.data.error}` : ""}
+                </div>
+
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div className="overflow-hidden rounded-xl border bg-muted">
+                    {dishImageQuery.data?.image_url ? (
+                      <img src={dishImageQuery.data.image_url} alt="original" className="h-44 w-full object-cover" />
+                    ) : (
+                      <div className="grid h-44 place-items-center text-sm text-muted-foreground">No image</div>
+                    )}
+                  </div>
+                  <div className="overflow-hidden rounded-xl border bg-muted">
+                    {dishImageQuery.data?.processed_image_url ? (
+                      <img src={dishImageQuery.data.processed_image_url} alt="processed" className="h-44 w-full object-contain p-3" />
+                    ) : (
+                      <div className="grid h-44 place-items-center text-sm text-muted-foreground">Processed not ready</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => removeBgMutation.mutate()}
+                    disabled={!dishImageQuery.data?.image_url || removeBgMutation.isPending}
+                  >
+                    {removeBgMutation.isPending ? t("common.loading") : t("dish.imageProcessing.removeBg")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => useOriginalMutation.mutate()}
+                    disabled={useOriginalMutation.isPending}
+                  >
+                    {useOriginalMutation.isPending ? t("common.loading") : t("dish.imageProcessing.useOriginal")}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => useProcessedMutation.mutate()}
+                    disabled={!dishImageQuery.data?.processed_image_url || useProcessedMutation.isPending}
+                  >
+                    {useProcessedMutation.isPending ? t("common.loading") : t("dish.imageProcessing.useProcessed")}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
             <div className="grid gap-3 md:grid-cols-4">
               <label className="flex items-center gap-2 rounded-xl border bg-card px-3 py-2 text-sm">
                 <input type="checkbox" className="h-4 w-4" {...form.register("available")} />
@@ -408,6 +512,14 @@ export default function AdminDishesPage() {
                 {t("dish.isVegan")}
               </label>
             </div>
+
+            {editing?.id ? (
+              <TranslationEditor dishId={editing.id} open={modalOpen} />
+            ) : (
+              <div className="rounded-2xl border bg-muted/10 p-4 text-sm text-muted-foreground">
+                {t("admin.dishes.translations.saveFirst")}
+              </div>
+            )}
 
             <DialogFooter>
               <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>

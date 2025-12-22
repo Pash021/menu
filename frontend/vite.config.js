@@ -26,11 +26,6 @@ export default defineConfig(({ command }) => {
           changeOrigin: true,
           secure: false,
         },
-        "/static": {
-          target: backendOrigin,
-          changeOrigin: true,
-          secure: false,
-        },
       },
     },
     base: command === "build" ? "/static/react/" : "/",

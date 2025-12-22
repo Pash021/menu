@@ -57,7 +57,6 @@ export function DishDetailsModal({ dish, open, onOpenChange, quantity = 0, onInc
               </div>
 
               <div className="mt-5 rounded-xl border bg-card p-4">
-                <div className="text-xs text-muted-foreground">{t("dish.priceLabel")}</div>
                 <div className="text-2xl font-semibold tracking-tight">{formatMoney(dish.price, dish.currency)}</div>
               </div>
 

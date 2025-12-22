@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 import mimetypes
 import os
 import secrets
@@ -45,7 +46,7 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text, inspect
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from flask_wtf import FlaskForm
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.exceptions import HTTPException
@@ -54,7 +55,9 @@ from wtforms import BooleanField, DecimalField, FileField, IntegerField, Passwor
 from wtforms.validators import DataRequired, Email, EqualTo, Length, NumberRange
 import qrcode
 from googletrans import Translator
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
+from datetime import datetime
+import copy
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent
@@ -62,16 +65,65 @@ UPLOAD_ROOT = BASE_DIR / "uploads"
 LOGO_FOLDER = UPLOAD_ROOT / "logos"
 DISH_FOLDER = UPLOAD_ROOT / "dishes"
 QR_FOLDER = UPLOAD_ROOT / "qr"
+CATEGORY_FOLDER = UPLOAD_ROOT / "categories"
+FONT_FOLDER = UPLOAD_ROOT / "fonts"
+LOADER_FOLDER = UPLOAD_ROOT / "loaders"
 load_dotenv(BASE_DIR / ".env")
-for folder in (UPLOAD_ROOT, LOGO_FOLDER, DISH_FOLDER, QR_FOLDER):
+for folder in (UPLOAD_ROOT, LOGO_FOLDER, DISH_FOLDER, QR_FOLDER, CATEGORY_FOLDER, FONT_FOLDER, LOADER_FOLDER):
     folder.mkdir(parents=True, exist_ok=True)
 mimetypes.add_type("image/svg+xml", ".svg")
+mimetypes.add_type("image/avif", ".avif")
+mimetypes.add_type("image/gif", ".gif")
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("font/woff", ".woff")
+mimetypes.add_type("font/ttf", ".ttf")
+mimetypes.add_type("font/otf", ".otf")
 mimetypes.add_type("application/pdf", ".pdf")
 
 # Upload limits (affects request max size for multipart/form-data)
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))
+MAX_CATEGORY_ICON_BYTES = int(os.environ.get("MAX_CATEGORY_ICON_BYTES", str(5 * 1024 * 1024)))
+MAX_LOGO_BYTES = int(os.environ.get("MAX_LOGO_BYTES", str(min(MAX_UPLOAD_BYTES, 5 * 1024 * 1024))))
+CATEGORY_ICON_MAX_PX = int(os.environ.get("CATEGORY_ICON_MAX_PX", "240"))
+DISH_IMAGE_MAX_PX = int(os.environ.get("DISH_IMAGE_MAX_PX", "960"))
+DISH_IMAGE_QUALITY = int(os.environ.get("DISH_IMAGE_QUALITY", "82"))
+MAX_FONT_BYTES = int(os.environ.get("MAX_FONT_BYTES", str(5 * 1024 * 1024)))
+MAX_LOADER_BYTES = int(os.environ.get("MAX_LOADER_BYTES", str(5 * 1024 * 1024)))
+LOADER_MAX_PX = int(os.environ.get("LOADER_MAX_PX", "320"))
 ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp"}
+ALLOWED_LOGO_EXTS = {".svg", ".png", ".jpg", ".jpeg", ".webp"}
+ALLOWED_LOGO_MIMES = {"image/svg+xml", *ALLOWED_IMAGE_MIMES}
+ALLOWED_CATEGORY_ICON_EXTS = {".svg", ".avif", ".png", ".jpg", ".jpeg", ".webp"}
+ALLOWED_CATEGORY_ICON_MIMES = {
+    "image/svg+xml",
+    "image/avif",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+}
+ALLOWED_LOADER_EXTS = {".svg", ".avif", ".gif", ".png", ".jpg", ".jpeg", ".webp"}
+ALLOWED_LOADER_MIMES = {
+    "image/svg+xml",
+    "image/avif",
+    "image/gif",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+}
+ALLOWED_LOADER_STYLES = {"spinner", "dots", "ring"}
+ALLOWED_FONT_EXTS = {".woff2", ".woff", ".ttf", ".otf"}
+ALLOWED_FONT_MIMES = {
+    "font/woff2",
+    "font/woff",
+    "font/ttf",
+    "font/otf",
+    "application/font-woff2",
+    "application/font-woff",
+    "application/x-font-ttf",
+    "application/x-font-otf",
+    "application/octet-stream",
+}
 
 LANGUAGES = {
     "ru": "Русский",
@@ -1122,6 +1174,77 @@ elif Translator:
     translator = Translator()
     translator_type = "googletrans"
 
+VITE_DEV = "http://127.0.0.1:5173"
+
+@app.route("/react/")
+@app.route("/react/<path:path>")
+def react_proxy(path=""):
+    # Legacy dev-only proxy (was used before SPA static build).
+    # Deprecated: run Vite directly (cd frontend && npm run dev) and access it on :5173.
+    abort(404)
+
+
+@app.after_request
+def add_cache_headers(resp):
+    try:
+        path = request.path or ""
+    except Exception:
+        return resp
+
+    # Harden a bit for static assets.
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+
+    # SPA HTML entrypoints (served from /admin, /r, /qr, /app, /login, /register, /).
+    # Never cache HTML to avoid stale deployments.
+    try:
+        is_html = (resp.mimetype or "").startswith("text/html")
+    except Exception:
+        is_html = False
+    if is_html and react_build_exists() and (
+        path == "/"
+        or path == "/login"
+        or path == "/register"
+        or path.startswith("/admin")
+        or path.startswith("/r")
+        or path.startswith("/qr")
+        or path.startswith("/app")
+    ):
+        resp.headers["Cache-Control"] = "no-store"
+        resp.headers.add("Vary", "Accept-Encoding")
+        return resp
+
+    if path.startswith("/static/react/assets/"):
+        # Vite assets are content-hashed -> safe to cache forever.
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        resp.headers.add("Vary", "Accept-Encoding")
+        return resp
+
+    if path.startswith("/static/react/"):
+        # index.html should update immediately after deploy.
+        resp.headers["Cache-Control"] = "no-store"
+        resp.headers.add("Vary", "Accept-Encoding")
+        return resp
+
+    if path.startswith("/uploads/"):
+        # Uploaded files can change; keep cache moderate.
+        resp.headers.setdefault("Cache-Control", "public, max-age=86400")
+        resp.headers.add("Vary", "Accept-Encoding")
+        return resp
+
+    if path.startswith("/api/public/"):
+        # Public GET endpoints: short cache is OK; keep admin endpoints no-store.
+        if request.method in {"GET", "HEAD"}:
+            resp.headers.setdefault("Cache-Control", "public, max-age=60, stale-while-revalidate=300")
+            resp.headers.add("Vary", "Accept-Encoding")
+        return resp
+
+    if path.startswith("/api/"):
+        resp.headers.setdefault("Cache-Control", "no-store")
+        resp.headers.add("Vary", "Accept-Encoding")
+        return resp
+
+    return resp
+
 
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
@@ -1144,8 +1267,21 @@ class Restaurant(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     name = db.Column(db.String(150), nullable=False)
     description = db.Column(db.Text, nullable=True)
+    phone = db.Column(db.String(40), nullable=True)
+    whatsapp = db.Column(db.String(40), nullable=True)
+    instagram = db.Column(db.String(255), nullable=True)
+    facebook = db.Column(db.String(255), nullable=True)
     theme = db.Column(db.String(32), default="classic")
-    menu_font = db.Column(db.String(32), default="serif")
+    menu_font = db.Column(db.String(255), default="serif")
+    menu_font_size = db.Column(db.Integer, default=16)
+    menu_font_brand = db.Column(db.String(255), nullable=True)
+    menu_font_brand_size = db.Column(db.Integer, nullable=True)
+    menu_font_category = db.Column(db.String(255), nullable=True)
+    menu_font_category_size = db.Column(db.Integer, nullable=True)
+    menu_font_item = db.Column(db.String(255), nullable=True)
+    menu_font_item_size = db.Column(db.Integer, nullable=True)
+    loading_image_path = db.Column(db.String(255), nullable=True)
+    loading_style = db.Column(db.String(32), default="spinner")
     name_translations = db.Column(db.JSON, default=dict)
     description_translations = db.Column(db.JSON, default=dict)
     slug = db.Column(db.String(180), unique=True, nullable=False)
@@ -1154,10 +1290,25 @@ class Restaurant(db.Model):
         "Category", backref="restaurant", lazy=True, cascade="all, delete-orphan", order_by="Category.sort_order"
     )
     tables = db.relationship("DiningTable", backref="restaurant", lazy=True, cascade="all, delete-orphan")
+    theme_id = db.Column(db.Integer, db.ForeignKey("themes.id"), nullable=True)
+    theme_overrides_json = db.Column(db.JSON, nullable=True)
+    theme_ref = db.relationship("Theme", lazy=True)
+    header_style_json = db.Column(db.JSON, nullable=True)
+    hero_preset_id = db.Column(db.Integer, db.ForeignKey("hero_presets.id"), nullable=True)
+    hero_overrides_json = db.Column(db.JSON, nullable=True)
+    hero_preset_ref = db.relationship("HeroPreset", lazy=True)
+    menu_card_preset_id = db.Column(db.Integer, db.ForeignKey("menu_card_presets.id"), nullable=True)
+    menu_card_overrides_json = db.Column(db.JSON, nullable=True)
+    menu_card_remove_bg_on_upload = db.Column(db.Boolean, default=False)
 
     def logo_url(self) -> str | None:
         if self.logo_filename:
             return url_for("uploaded_file", filename=self.logo_filename)
+        return None
+
+    def loading_image_url(self) -> str | None:
+        if getattr(self, "loading_image_path", None):
+            return url_for("uploaded_file", filename=self.loading_image_path)
         return None
 
     def translated_name(self, lang: str) -> str:
@@ -1190,6 +1341,8 @@ class Category(db.Model):
     restaurant_id = db.Column(db.Integer, db.ForeignKey("restaurant.id"), nullable=False)
     name_translations = db.Column(db.JSON, default=dict)
     icon_name = db.Column(db.String(64), nullable=True)
+    image_path = db.Column(db.String(255), nullable=True)
+    header_style_json = db.Column(db.JSON, nullable=True)
     dishes = db.relationship(
         "Dish",
         backref="category",
@@ -1197,6 +1350,11 @@ class Category(db.Model):
         cascade="all, delete-orphan",
         order_by="Dish.name",
     )
+
+    def image_url(self) -> str | None:
+        if self.image_path:
+            return url_for("uploaded_file", filename=self.image_path)
+        return None
 
     def translated_name(self, lang: str) -> str:
         if lang == DEFAULT_LANG:
@@ -1214,15 +1372,44 @@ class Dish(db.Model):
     is_spicy = db.Column(db.Boolean, default=False)
     is_vegan = db.Column(db.Boolean, default=False)
     image_filename = db.Column(db.String(255), nullable=True)
+    image_variants_json = db.Column(db.JSON, nullable=True)
+    processed_image_filename = db.Column(db.String(255), nullable=True)
+    processed_image_variants_json = db.Column(db.JSON, nullable=True)
+    image_remove_bg_status = db.Column(db.String(32), nullable=True)
+    image_remove_bg_error = db.Column(db.String(255), nullable=True)
+    use_processed_image = db.Column(db.Boolean, default=False)
     currency = db.Column(db.String(8), nullable=False, default="AMD")
     name_translations = db.Column(db.JSON, default=dict)
     description_translations = db.Column(db.JSON, default=dict)
     category_id = db.Column(db.Integer, db.ForeignKey("category.id"), nullable=False)
 
     def image_url(self) -> str | None:
+        use_processed = bool(getattr(self, "use_processed_image", False))
+        processed = getattr(self, "processed_image_filename", None)
+        status = getattr(self, "image_remove_bg_status", None)
+        if use_processed and processed and status == "done":
+            return url_for("uploaded_file", filename=processed)
         if self.image_filename:
             return url_for("uploaded_file", filename=self.image_filename)
         return None
+
+    def image_srcset(self) -> str | None:
+        use_processed = bool(getattr(self, "use_processed_image", False))
+        processed = getattr(self, "processed_image_filename", None)
+        status = getattr(self, "image_remove_bg_status", None)
+        variants = getattr(self, "processed_image_variants_json", None) if use_processed and processed and status == "done" else getattr(self, "image_variants_json", None)
+        if not isinstance(variants, dict):
+            return None
+        parts = []
+        for k, v in sorted(variants.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 10**9):
+            try:
+                w = int(k)
+            except Exception:
+                continue
+            if not isinstance(v, str) or not v:
+                continue
+            parts.append(f"{url_for('uploaded_file', filename=v)} {w}w")
+        return ", ".join(parts) if parts else None
 
     def is_image(self) -> bool:
         return is_image_filename(self.image_filename)
@@ -1238,6 +1425,308 @@ class Dish(db.Model):
             return self.description or ""
         translations = self.description_translations or {}
         return translations.get(lang) or (self.description or "")
+
+
+class DishTranslation(db.Model):
+    __tablename__ = "dish_translations"
+    id = db.Column(db.Integer, primary_key=True)
+    dish_id = db.Column(db.Integer, db.ForeignKey("dish.id", ondelete="CASCADE"), nullable=False)
+    lang = db.Column(db.String(12), nullable=False)
+    auto_title = db.Column(db.Text, nullable=True)
+    auto_description = db.Column(db.Text, nullable=True)
+    manual_title = db.Column(db.Text, nullable=True)
+    manual_description = db.Column(db.Text, nullable=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    dish = db.relationship(
+        "Dish",
+        backref=db.backref("translations", cascade="all, delete-orphan"),
+    )
+
+    __table_args__ = (db.UniqueConstraint("dish_id", "lang", name="uq_dish_translation"),)
+
+
+class MenuCardPreset(db.Model):
+    __tablename__ = "menu_card_presets"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    key = db.Column(db.String(80), unique=True, nullable=False)
+    is_builtin = db.Column(db.Boolean, default=False)
+    config_json = db.Column(db.JSON, default=dict)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DishImageJob(db.Model):
+    __tablename__ = "dish_image_jobs"
+    id = db.Column(db.Integer, primary_key=True)
+    dish_id = db.Column(db.Integer, db.ForeignKey("dish.id", ondelete="CASCADE"), nullable=False)
+    job_type = db.Column(db.String(32), nullable=False, default="remove_bg")
+    status = db.Column(db.String(32), nullable=False, default="queued")  # queued|processing|done|failed
+    input_filename = db.Column(db.String(255), nullable=True)
+    output_filename = db.Column(db.String(255), nullable=True)
+    error = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    dish = db.relationship(
+        "Dish",
+        backref=db.backref("image_jobs", cascade="all, delete-orphan"),
+    )
+
+
+class Theme(db.Model):
+    __tablename__ = "themes"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    preset_key = db.Column(db.String(80), unique=True, nullable=False)
+    config_json = db.Column(db.JSON, default=dict)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class HeroPreset(db.Model):
+    __tablename__ = "hero_presets"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    key = db.Column(db.String(80), unique=True, nullable=False)
+    is_builtin = db.Column(db.Boolean, default=False)
+    config_json = db.Column(db.JSON, default=dict)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+def deep_merge_dict(base: dict, overrides: dict) -> dict:
+    result = copy.deepcopy(base or {})
+    for k, v in (overrides or {}).items():
+        if isinstance(v, dict) and isinstance(result.get(k), dict):
+            result[k] = deep_merge_dict(result.get(k) or {}, v)
+        else:
+            result[k] = v
+    return result
+
+
+DEFAULT_THEME_PRESET = "burger_orange"
+
+THEME_PRESETS: dict[str, dict] = {
+    "burger_orange": {
+        "name": "Burger Orange",
+        "category_layout": "pills",
+        "transition": "pageCurlLite",
+        "card_style": "glass",
+        "vars": {
+            "--pm-bg": "#FFF4E6",
+            "--pm-card": "rgba(255,255,255,0.68)",
+            "--pm-border": "rgba(12,7,3,0.10)",
+            "--pm-text": "rgba(12,7,3,0.96)",
+            "--pm-muted": "rgba(12,7,3,0.55)",
+            "--pm-accent": "#F39A1E",
+            "--pm-accent-2": "#FFB64D",
+            "--pm-accent-3": "#FFCF7D",
+            "--pm-category": "#F39A1E",
+            "--pm-shadow": "0 14px 40px rgba(12, 7, 3, 0.14)",
+            "--pm-shadow-soft": "0 10px 26px rgba(12, 7, 3, 0.12)",
+            "--pm-radius-lg": "22px",
+            "--pm-radius-xl": "28px",
+        },
+    },
+    "coffee_minimal": {
+        "name": "Coffee Minimal",
+        "category_layout": "gridCards",
+        "transition": "slide",
+        "card_style": "flat",
+        "vars": {
+            "--pm-bg": "#F6F1EA",
+            "--pm-card": "rgba(255,255,255,0.98)",
+            "--pm-border": "rgba(60,45,34,0.14)",
+            "--pm-text": "rgba(28,20,14,0.96)",
+            "--pm-muted": "rgba(28,20,14,0.55)",
+            "--pm-accent": "#3C2D22",
+            "--pm-accent-2": "#6B4F3A",
+            "--pm-accent-3": "#B89A7C",
+            "--pm-category": "#3C2D22",
+            "--pm-shadow": "0 10px 30px rgba(28, 20, 14, 0.10)",
+            "--pm-shadow-soft": "0 8px 20px rgba(28, 20, 14, 0.08)",
+            "--pm-radius-lg": "18px",
+            "--pm-radius-xl": "22px",
+        },
+    },
+    "sushi_neon": {
+        "name": "Sushi Neon",
+        "category_layout": "carousel",
+        "transition": "slide",
+        "card_style": "glow",
+        "vars": {
+            "--pm-bg": "#0B0B10",
+            "--pm-card": "rgba(18,18,26,0.75)",
+            "--pm-border": "rgba(255,255,255,0.10)",
+            "--pm-text": "rgba(255,255,255,0.95)",
+            "--pm-muted": "rgba(255,255,255,0.65)",
+            "--pm-accent": "#00F5D4",
+            "--pm-accent-2": "#F15BB5",
+            "--pm-accent-3": "#00BBF9",
+            "--pm-category": "#1B1B26",
+            "--pm-shadow": "0 16px 44px rgba(0, 245, 212, 0.14)",
+            "--pm-shadow-soft": "0 12px 30px rgba(241, 91, 181, 0.10)",
+            "--pm-radius-lg": "22px",
+            "--pm-radius-xl": "28px",
+        },
+    },
+}
+
+DEFAULT_HERO_PRESET_KEY = "premiumHaloGlass"
+
+HERO_PRESETS: dict[str, dict] = {
+    "minimalClean": {
+        "name": "Minimal Clean",
+        "config_json": {
+            "backgroundMode": "solid",
+            "bgSolid": "#FFF6EE",
+            "bgGradient": ["#FFF6EE", "#FFE8D2"],
+            "accentColor": "#F39A1E",
+            "badgeShape": "rounded",
+            "badgeBlur": 0,
+            "badgeOpacity": 0.0,
+            "badgeBorderOpacity": 0.0,
+            "logoSize": 72,
+            "glowStrength": 0.0,
+            "glowRadius": 18,
+            "fadeStrength": 0.55,
+            "paddingTop": 16,
+            "paddingBottom": 18,
+            "radius": 22,
+        },
+    },
+    "premiumHaloGlass": {
+        "name": "Premium Halo Glass",
+        "config_json": {
+            "backgroundMode": "gradient",
+            "bgSolid": "#FFF3E6",
+            "bgGradient": ["#FFF3E6", "#FFE1B8"],
+            "accentColor": "#F39A1E",
+            "badgeShape": "circle",
+            "badgeBlur": 14,
+            "badgeOpacity": 0.78,
+            "badgeBorderOpacity": 0.35,
+            "logoSize": 76,
+            "glowStrength": 0.55,
+            "glowRadius": 26,
+            "fadeStrength": 0.75,
+            "paddingTop": 18,
+            "paddingBottom": 22,
+            "radius": 26,
+        },
+    },
+    "neonNight": {
+        "name": "Neon Night",
+        "config_json": {
+            "backgroundMode": "gradient",
+            "bgSolid": "#0B0B10",
+            "bgGradient": ["#0B0B10", "#141426"],
+            "accentColor": "#00F5D4",
+            "badgeShape": "circle",
+            "badgeBlur": 10,
+            "badgeOpacity": 0.42,
+            "badgeBorderOpacity": 0.22,
+            "logoSize": 74,
+            "glowStrength": 0.7,
+            "glowRadius": 30,
+            "fadeStrength": 0.65,
+            "paddingTop": 18,
+            "paddingBottom": 22,
+            "radius": 26,
+        },
+    },
+}
+
+DEFAULT_MENU_CARD_PRESET_KEY = "warmFood"
+
+MENU_CARD_PRESETS: dict[str, dict] = {
+    "minimalClean": {
+        "name": "Minimal Clean",
+        "config_json": {
+            "preset": "minimalClean",
+            "layout": "grid",
+            "cardRadius": 22,
+            "cardBorderOpacity": 0.12,
+            "cardShadow": 0.10,
+            "imageRatio": "1:1",
+            "imageFit": "cover",
+            "imagePadding": 0,
+            "imageBgMode": "solid",
+            "imageBgColors": ["#FFFFFF", "#FFFFFF"],
+        },
+    },
+    "warmFood": {
+        "name": "Warm Food",
+        "config_json": {
+            "preset": "warmFood",
+            "layout": "grid",
+            "cardRadius": 24,
+            "cardBorderOpacity": 0.10,
+            "cardShadow": 0.18,
+            "imageRatio": "4:3",
+            "imageFit": "cover",
+            "imagePadding": 0,
+            "imageBgMode": "gradient",
+            "imageBgColors": ["#FFF0D9", "#FFE6C4"],
+        },
+    },
+    "glassModern": {
+        "name": "Glass Modern",
+        "config_json": {
+            "preset": "glassModern",
+            "layout": "grid",
+            "cardRadius": 24,
+            "cardBorderOpacity": 0.14,
+            "cardShadow": 0.22,
+            "imageRatio": "1:1",
+            "imageFit": "cover",
+            "imagePadding": 0,
+            "imageBgMode": "gradient",
+            "imageBgColors": ["#FBE7D2", "#E7F6FF"],
+        },
+    },
+    "darkNeon": {
+        "name": "Dark Neon",
+        "config_json": {
+            "preset": "darkNeon",
+            "layout": "grid",
+            "cardRadius": 22,
+            "cardBorderOpacity": 0.18,
+            "cardShadow": 0.26,
+            "imageRatio": "1:1",
+            "imageFit": "cover",
+            "imagePadding": 0,
+            "imageBgMode": "solid",
+            "imageBgColors": ["#12121A", "#12121A"],
+        },
+    },
+    "compactList": {
+        "name": "Compact List",
+        "config_json": {
+            "preset": "compactList",
+            "layout": "compact",
+            "cardRadius": 22,
+            "cardBorderOpacity": 0.12,
+            "cardShadow": 0.12,
+            "imageRatio": "1:1",
+            "imageFit": "cover",
+            "imagePadding": 0,
+            "imageBgMode": "gradient",
+            "imageBgColors": ["#FFF0D9", "#FFE6C4"],
+        },
+    },
+}
+
+
+def api_theme_dict(theme: Theme) -> dict:
+    return {
+        "id": theme.id,
+        "name": theme.name,
+        "preset_key": theme.preset_key,
+        "config_json": theme.config_json or {},
+    }
 
     def currency_symbol(self) -> str:
         return CURRENCY_SYMBOLS.get(self.currency or "AMD", "֏")
@@ -1579,10 +2068,774 @@ def save_image_upload(file_storage, folder: Path, *, field_name: str = "file") -
     return str(destination.relative_to(UPLOAD_ROOT))
 
 
+def save_dish_image_upload(file_storage, folder: Path, *, field_name: str = "image", max_px: int = DISH_IMAGE_MAX_PX) -> str:
+    """Save an optimized dish image as WEBP with a consistent max dimension."""
+    if not file_storage or not getattr(file_storage, "filename", None):
+        raise ApiUploadError("VALIDATION_ERROR", f"Файл {field_name} обязателен", status=400)
+
+    filename = secure_filename(file_storage.filename)
+    if not filename:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректное имя файла", status=400)
+
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_IMAGE_EXTS:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Разрешены только JPG/PNG/WEBP",
+            status=415,
+            details={"allowed_exts": sorted(ALLOWED_IMAGE_EXTS)},
+        )
+
+    mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
+    if mimetype and mimetype not in ALLOWED_IMAGE_MIMES:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Разрешены только JPG/PNG/WEBP",
+            status=415,
+            details={"allowed_mimes": sorted(ALLOWED_IMAGE_MIMES)},
+        )
+
+    size = get_filestorage_size(file_storage)
+    if size is not None and size > MAX_UPLOAD_BYTES:
+        raise ApiUploadError("PAYLOAD_TOO_LARGE", f"Файл слишком большой (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)", status=413)
+
+    folder.mkdir(parents=True, exist_ok=True)
+
+    try:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        with Image.open(file_storage.stream) as img:
+            img = ImageOps.exif_transpose(img)
+            img.load()
+            if img.mode in ("RGBA", "LA"):
+                bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+                bg.alpha_composite(img.convert("RGBA"))
+                img = bg.convert("RGB")
+            else:
+                img = img.convert("RGB")
+
+            max_px = int(max_px) if isinstance(max_px, int) else DISH_IMAGE_MAX_PX
+            max_px = max(240, min(1600, max_px))
+            if img.width > max_px or img.height > max_px:
+                img.thumbnail((max_px, max_px), Image.LANCZOS)
+
+            quality = int(DISH_IMAGE_QUALITY) if isinstance(DISH_IMAGE_QUALITY, int) else 82
+            quality = max(60, min(92, quality))
+            unique_name = f"{secrets.token_hex(10)}.webp"
+            destination = folder / unique_name
+            img.save(destination, format="WEBP", quality=quality, method=6)
+            return str(destination.relative_to(UPLOAD_ROOT))
+    except UnidentifiedImageError:
+        raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "Файл не является корректным изображением", status=415)
+    except ApiUploadError:
+        raise
+    except Exception:
+        raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "Файл не является корректным изображением", status=415)
+    finally:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+
+
+def _dish_variant_sizes() -> list[int]:
+    # Keep a small first size for mobile 2-col grids (≈180–220px per image).
+    return [240, 480, 720, 1024]
+
+
+def build_dish_image_variants(rel_filename: str, *, sizes: list[int] | None = None) -> dict:
+    """Create responsive WEBP variants under uploads/dishes/variants and return {width: rel_path}."""
+    if not rel_filename:
+        return {}
+    sizes = sizes or _dish_variant_sizes()
+    try:
+        sizes = sorted({int(s) for s in sizes if int(s) > 0})
+    except Exception:
+        sizes = _dish_variant_sizes()
+
+    src_path = (UPLOAD_ROOT / rel_filename).resolve()
+    if not src_path.is_file():
+        return {}
+
+    variants_dir = (DISH_FOLDER / "variants")
+    variants_dir.mkdir(parents=True, exist_ok=True)
+    stem = src_path.stem
+
+    out: dict = {}
+    try:
+        with Image.open(src_path) as img:
+            img = ImageOps.exif_transpose(img)
+            img.load()
+            img = img.convert("RGB")
+            orig_w = int(img.width) if img.width else 0
+
+            for w in sizes:
+                if w < 240:
+                    continue
+                if w > 2048:
+                    continue
+                target = img.copy()
+                if target.width > w:
+                    ratio = w / float(target.width)
+                    h = max(1, int(round(target.height * ratio)))
+                    target = target.resize((w, h), Image.LANCZOS)
+                else:
+                    # Use original if smaller, but still store a single "original width" entry.
+                    w = int(target.width)
+                    if str(w) in out:
+                        break
+
+                quality = int(DISH_IMAGE_QUALITY) if isinstance(DISH_IMAGE_QUALITY, int) else 82
+                quality = max(60, min(92, quality))
+                filename = f"{stem}-w{w}.webp"
+                dest = variants_dir / filename
+                target.save(dest, format="WEBP", quality=quality, method=6)
+                out[str(w)] = str(dest.relative_to(UPLOAD_ROOT))
+                if orig_w and w == orig_w:
+                    break
+    except Exception:
+        return {}
+
+    return out
+
+
+def _try_remove_bg_bytes(input_bytes: bytes) -> bytes:
+    """Remove background using rembg if available (returns PNG bytes with alpha)."""
+    try:
+        from rembg import remove  # type: ignore
+    except Exception as e:
+        raise RuntimeError("rembg is not installed") from e
+    return remove(input_bytes)
+
+
+def _trim_transparent_edges(img: Image.Image, *, padding: int = 18) -> Image.Image:
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
+    alpha = img.split()[-1]
+    bbox = alpha.getbbox()
+    if not bbox:
+        return img
+    cropped = img.crop(bbox)
+    pad = max(0, int(padding))
+    if pad <= 0:
+        return cropped
+    out = Image.new("RGBA", (cropped.width + pad * 2, cropped.height + pad * 2), (0, 0, 0, 0))
+    out.alpha_composite(cropped, (pad, pad))
+    return out
+
+
+def enqueue_dish_remove_bg_job(dish: Dish) -> DishImageJob:
+    job = DishImageJob(
+        dish_id=dish.id,
+        job_type="remove_bg",
+        status="queued",
+        input_filename=dish.image_filename,
+    )
+    db.session.add(job)
+    dish.image_remove_bg_status = "queued"
+    dish.image_remove_bg_error = None
+    dish.use_processed_image = False
+    return job
+
+
+def process_one_dish_image_job(job: DishImageJob) -> bool:
+    if not job or job.status not in ("queued", "processing"):
+        return False
+    dish = db.session.get(Dish, job.dish_id) if job.dish_id else None
+    if not dish:
+        job.status = "failed"
+        job.error = "Dish not found"
+        return True
+
+    src_rel = job.input_filename or dish.image_filename
+    if not src_rel:
+        job.status = "failed"
+        job.error = "No input image"
+        dish.image_remove_bg_status = "failed"
+        dish.image_remove_bg_error = "No input image"
+        return True
+
+    src_path = (UPLOAD_ROOT / src_rel).resolve()
+    if not src_path.is_file():
+        job.status = "failed"
+        job.error = "Input file missing"
+        dish.image_remove_bg_status = "failed"
+        dish.image_remove_bg_error = "Input file missing"
+        return True
+
+    job.status = "processing"
+    dish.image_remove_bg_status = "processing"
+    dish.image_remove_bg_error = None
+    db.session.commit()
+
+    processed_dir = (DISH_FOLDER / "processed")
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    out_name = f"{src_path.stem}-bg.webp"
+    out_path = (processed_dir / out_name)
+
+    try:
+        input_bytes = src_path.read_bytes()
+        out_bytes = _try_remove_bg_bytes(input_bytes)
+        with Image.open(io.BytesIO(out_bytes)) as img:
+            img = ImageOps.exif_transpose(img)
+            img.load()
+            img = img.convert("RGBA")
+            img = _trim_transparent_edges(img, padding=18)
+            img.save(out_path, format="WEBP", quality=92, method=6)
+
+        rel_out = str(out_path.relative_to(UPLOAD_ROOT))
+        variants = build_dish_image_variants(rel_out, sizes=_dish_variant_sizes())
+        dish.processed_image_filename = rel_out
+        dish.processed_image_variants_json = variants or None
+        dish.image_remove_bg_status = "done"
+        dish.image_remove_bg_error = None
+        dish.use_processed_image = True
+        job.status = "done"
+        job.output_filename = rel_out
+        job.error = None
+    except Exception as e:
+        job.status = "failed"
+        job.error = str(e)[:250]
+        dish.image_remove_bg_status = "failed"
+        dish.image_remove_bg_error = str(e)[:250]
+
+    db.session.commit()
+    return True
+
+
+def process_pending_dish_image_jobs(limit: int = 3) -> int:
+    limit = max(1, min(int(limit or 3), 20))
+    jobs = DishImageJob.query.filter(DishImageJob.status == "queued").order_by(DishImageJob.id.asc()).limit(limit).all()
+    count = 0
+    for job in jobs:
+        try:
+            if process_one_dish_image_job(job):
+                count += 1
+        except Exception:
+            try:
+                job.status = "failed"
+                job.error = "Unhandled error"
+                dish = db.session.get(Dish, job.dish_id) if job.dish_id else None
+                if dish:
+                    dish.image_remove_bg_status = "failed"
+                    dish.image_remove_bg_error = "Unhandled error"
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+    return count
+
+SVG_BLOCKLIST = ("<script", "onload=", "javascript:", "<foreignobject")
+
+
+def get_filestorage_size(file_storage) -> int | None:
+    size = getattr(file_storage, "content_length", None)
+    try:
+        if isinstance(size, int) and size >= 0:
+            return size
+    except Exception:
+        pass
+    try:
+        pos = file_storage.stream.tell()
+        file_storage.stream.seek(0, os.SEEK_END)
+        end = file_storage.stream.tell()
+        file_storage.stream.seek(pos)
+        if isinstance(end, int) and end >= 0:
+            return end
+    except Exception:
+        return None
+    return None
+
+
+def validate_svg_bytes(data: bytes) -> None:
+    # Minimal SVG sanitization: reject obvious scripting vectors.
+    text = data.decode("utf-8", errors="ignore").lower()
+    if "<svg" not in text:
+        raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "SVG файл некорректен", status=415)
+    for marker in SVG_BLOCKLIST:
+        if marker in text:
+            raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "SVG содержит потенциально опасный код", status=415)
+
+
+def save_logo_upload(file_storage, folder: Path, *, field_name: str = "logo") -> str:
+    """Save a validated restaurant logo (SVG or raster) into uploads and return relative path."""
+    if not file_storage or not getattr(file_storage, "filename", None):
+        raise ApiUploadError("VALIDATION_ERROR", f"Файл {field_name} обязателен", status=400)
+
+    filename = secure_filename(file_storage.filename)
+    if not filename:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректное имя файла", status=400)
+
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_LOGO_EXTS:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Разрешены только SVG/PNG (JPG/WEBP дополнительно)",
+            status=415,
+            details={"allowed_exts": sorted(ALLOWED_LOGO_EXTS)},
+        )
+
+    mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
+    if mimetype and mimetype not in ALLOWED_LOGO_MIMES:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Неподдерживаемый MIME тип",
+            status=415,
+            details={"allowed_mimes": sorted(ALLOWED_LOGO_MIMES)},
+        )
+
+    folder.mkdir(parents=True, exist_ok=True)
+
+    if ext == ".svg":
+        size = get_filestorage_size(file_storage)
+        if size is None:
+            try:
+                file_storage.stream.seek(0)
+            except Exception:
+                pass
+            head = file_storage.stream.read(MAX_LOGO_BYTES + 1) or b""
+            try:
+                file_storage.stream.seek(0)
+            except Exception:
+                pass
+            size = len(head)
+        if size > MAX_LOGO_BYTES:
+            raise ApiUploadError(
+                "PAYLOAD_TOO_LARGE",
+                f"Файл слишком большой (max {MAX_LOGO_BYTES // (1024 * 1024)} MB)",
+                status=413,
+            )
+        data = file_storage.read() or b""
+        if len(data) > MAX_LOGO_BYTES:
+            raise ApiUploadError(
+                "PAYLOAD_TOO_LARGE",
+                f"Файл слишком большой (max {MAX_LOGO_BYTES // (1024 * 1024)} MB)",
+                status=413,
+            )
+        validate_svg_bytes(data)
+        unique_name = f"{secrets.token_hex(10)}.svg"
+        destination = folder / unique_name
+        destination.write_bytes(data)
+        return str(destination.relative_to(UPLOAD_ROOT))
+
+    return save_image_upload(file_storage, folder, field_name=field_name)
+
+
+def safe_delete_uploaded_file(rel_path: str | None, *, required_top_dir: str | None = None) -> bool:
+    """Best-effort delete of an uploads/* file by relative path."""
+    if not rel_path:
+        return False
+    try:
+        rel = Path(str(rel_path))
+    except Exception:
+        return False
+    if rel.is_absolute():
+        return False
+    if ".." in rel.parts:
+        return False
+    if required_top_dir and (not rel.parts or rel.parts[0] != required_top_dir):
+        return False
+
+    try:
+        full = (UPLOAD_ROOT / rel).resolve()
+        uploads_root = UPLOAD_ROOT.resolve()
+        if uploads_root not in full.parents and full != uploads_root:
+            return False
+        if required_top_dir:
+            allowed_root = (UPLOAD_ROOT / required_top_dir).resolve()
+            if allowed_root not in full.parents and full != allowed_root:
+                return False
+        if full.is_file():
+            full.unlink(missing_ok=True)
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def validate_avif_header(file_storage) -> None:
+    try:
+        file_storage.stream.seek(0)
+    except Exception:
+        pass
+    header = file_storage.stream.read(64) or b""
+    try:
+        file_storage.stream.seek(0)
+    except Exception:
+        pass
+    # AVIF is ISO BMFF-based and typically contains "ftyp" + "avif"/"avis".
+    header_lower = header.lower()
+    if b"ftyp" not in header_lower or (b"avif" not in header_lower and b"avis" not in header_lower):
+        raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "AVIF файл некорректен", status=415)
+
+
+def save_category_icon_thumbnail(file_storage, folder: Path, *, max_px: int = CATEGORY_ICON_MAX_PX) -> str:
+    """Save a small WEBP thumbnail (max_px x max_px) for category icons."""
+    try:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        with Image.open(file_storage.stream) as img:
+            img.load()
+            img = img.convert("RGBA")
+            img.thumbnail((max_px, max_px), Image.LANCZOS)
+            unique_name = f"{secrets.token_hex(10)}.webp"
+            destination = folder / unique_name
+            img.save(destination, format="WEBP", quality=82, method=6)
+            return str(destination.relative_to(UPLOAD_ROOT))
+    except UnidentifiedImageError:
+        raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "Файл не является корректным изображением", status=415)
+    except ApiUploadError:
+        raise
+    except Exception:
+        raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "Файл не является корректным изображением", status=415)
+    finally:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+
+
+def save_category_icon_upload(file_storage, folder: Path, *, field_name: str = "file") -> str:
+    if not file_storage or not getattr(file_storage, "filename", None):
+        raise ApiUploadError("VALIDATION_ERROR", f"Файл {field_name} обязателен", status=400)
+
+    filename = secure_filename(file_storage.filename)
+    if not filename:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректное имя файла", status=400)
+
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_CATEGORY_ICON_EXTS:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Разрешены только SVG/AVIF (PNG/JPG/WEBP дополнительно)",
+            status=415,
+            details={"allowed_exts": sorted(ALLOWED_CATEGORY_ICON_EXTS)},
+        )
+
+    mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
+    if mimetype and mimetype not in ALLOWED_CATEGORY_ICON_MIMES:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Неподдерживаемый MIME тип",
+            status=415,
+            details={"allowed_mimes": sorted(ALLOWED_CATEGORY_ICON_MIMES)},
+        )
+
+    size = get_filestorage_size(file_storage)
+    if size is None:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        head = file_storage.stream.read(MAX_CATEGORY_ICON_BYTES + 1) or b""
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        size = len(head)
+    if size > MAX_CATEGORY_ICON_BYTES:
+        raise ApiUploadError(
+            "PAYLOAD_TOO_LARGE",
+            f"Файл слишком большой (max {MAX_CATEGORY_ICON_BYTES // (1024 * 1024)} MB)",
+            status=413,
+        )
+
+    folder.mkdir(parents=True, exist_ok=True)
+
+    if ext == ".svg":
+        data = file_storage.read() or b""
+        if len(data) > MAX_CATEGORY_ICON_BYTES:
+            raise ApiUploadError(
+                "PAYLOAD_TOO_LARGE",
+                f"Файл слишком большой (max {MAX_CATEGORY_ICON_BYTES // (1024 * 1024)} MB)",
+                status=413,
+            )
+        validate_svg_bytes(data)
+        unique_name = f"{secrets.token_hex(10)}.svg"
+        destination = folder / unique_name
+        destination.write_bytes(data)
+        return str(destination.relative_to(UPLOAD_ROOT))
+
+    if ext == ".avif":
+        validate_avif_header(file_storage)
+        unique_name = f"{secrets.token_hex(10)}.avif"
+        destination = folder / unique_name
+        file_storage.save(destination)
+        return str(destination.relative_to(UPLOAD_ROOT))
+
+    # Raster (PNG/JPEG/WEBP): store optimized thumbnail for public menu.
+    return save_category_icon_thumbnail(file_storage, folder, max_px=CATEGORY_ICON_MAX_PX)
+
+def save_loader_image_thumbnail(file_storage, folder: Path, *, max_px: int = LOADER_MAX_PX) -> str:
+    """Save a small WEBP thumbnail (max_px) for loader images (static raster only)."""
+    try:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        with Image.open(file_storage.stream) as img:
+            img.load()
+            img = img.convert("RGBA")
+            img.thumbnail((max_px, max_px), Image.LANCZOS)
+            unique_name = f"{secrets.token_hex(10)}.webp"
+            destination = folder / unique_name
+            img.save(destination, format="WEBP", quality=80, method=6)
+            return str(destination.relative_to(UPLOAD_ROOT))
+    except UnidentifiedImageError:
+        raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "Файл не является корректным изображением", status=415)
+    except ApiUploadError:
+        raise
+    except Exception:
+        raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "Файл не является корректным изображением", status=415)
+    finally:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+
+
+def save_loader_upload(file_storage, folder: Path, *, field_name: str = "file") -> str:
+    if not file_storage or not getattr(file_storage, "filename", None):
+        raise ApiUploadError("VALIDATION_ERROR", f"Файл {field_name} обязателен", status=400)
+
+    filename = secure_filename(file_storage.filename)
+    if not filename:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректное имя файла", status=400)
+
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_LOADER_EXTS:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Неподдерживаемый формат файла",
+            status=415,
+            details={"allowed_exts": sorted(ALLOWED_LOADER_EXTS)},
+        )
+
+    mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
+    if mimetype and mimetype not in ALLOWED_LOADER_MIMES:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Неподдерживаемый MIME тип",
+            status=415,
+            details={"allowed_mimes": sorted(ALLOWED_LOADER_MIMES)},
+        )
+
+    size = get_filestorage_size(file_storage)
+    if size is None:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        head = file_storage.stream.read(MAX_LOADER_BYTES + 1) or b""
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        size = len(head)
+    if size > MAX_LOADER_BYTES:
+        raise ApiUploadError(
+            "PAYLOAD_TOO_LARGE",
+            f"Файл слишком большой (max {MAX_LOADER_BYTES // (1024 * 1024)} MB)",
+            status=413,
+        )
+
+    folder.mkdir(parents=True, exist_ok=True)
+
+    if ext == ".svg":
+        data = file_storage.read() or b""
+        if len(data) > MAX_LOADER_BYTES:
+            raise ApiUploadError(
+                "PAYLOAD_TOO_LARGE",
+                f"Файл слишком большой (max {MAX_LOADER_BYTES // (1024 * 1024)} MB)",
+                status=413,
+            )
+        validate_svg_bytes(data)
+        unique_name = f"{secrets.token_hex(10)}.svg"
+        destination = folder / unique_name
+        destination.write_bytes(data)
+        return str(destination.relative_to(UPLOAD_ROOT))
+
+    if ext == ".avif":
+        validate_avif_header(file_storage)
+        unique_name = f"{secrets.token_hex(10)}.avif"
+        destination = folder / unique_name
+        file_storage.save(destination)
+        return str(destination.relative_to(UPLOAD_ROOT))
+
+    if ext == ".gif":
+        # Keep GIF as-is to preserve animation.
+        try:
+            try:
+                file_storage.stream.seek(0)
+            except Exception:
+                pass
+            with Image.open(file_storage.stream) as img:
+                img.verify()
+                if (img.format or "").upper() != "GIF":
+                    raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "GIF файл некорректен", status=415)
+        except ApiUploadError:
+            raise
+        except Exception:
+            raise ApiUploadError("UNSUPPORTED_MEDIA_TYPE", "GIF файл некорректен", status=415)
+        finally:
+            try:
+                file_storage.stream.seek(0)
+            except Exception:
+                pass
+
+        unique_name = f"{secrets.token_hex(10)}.gif"
+        destination = folder / unique_name
+        file_storage.save(destination)
+        return str(destination.relative_to(UPLOAD_ROOT))
+
+    # Static raster: store optimized thumbnail (WEBP) for public menu.
+    return save_loader_image_thumbnail(file_storage, folder, max_px=LOADER_MAX_PX)
+
+
+def save_font_upload(file_storage, folder: Path, *, field_name: str = "file") -> str:
+    if not file_storage or not getattr(file_storage, "filename", None):
+        raise ApiUploadError("VALIDATION_ERROR", f"Файл {field_name} обязателен", status=400)
+
+    filename = secure_filename(file_storage.filename)
+    if not filename:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректное имя файла", status=400)
+
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_FONT_EXTS:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Разрешены только WOFF2/WOFF/TTF/OTF",
+            status=415,
+            details={"allowed_exts": sorted(ALLOWED_FONT_EXTS)},
+        )
+
+    mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
+    if mimetype and mimetype not in ALLOWED_FONT_MIMES:
+        raise ApiUploadError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Неподдерживаемый MIME тип",
+            status=415,
+            details={"allowed_mimes": sorted(ALLOWED_FONT_MIMES)},
+        )
+
+    size = get_filestorage_size(file_storage)
+    if size is None:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        head = file_storage.stream.read(MAX_FONT_BYTES + 1) or b""
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        size = len(head)
+    if size > MAX_FONT_BYTES:
+        raise ApiUploadError(
+            "PAYLOAD_TOO_LARGE",
+            f"Файл слишком большой (max {MAX_FONT_BYTES // (1024 * 1024)} MB)",
+            status=413,
+        )
+
+    folder.mkdir(parents=True, exist_ok=True)
+    unique_name = f"{secrets.token_hex(10)}{ext}"
+    destination = folder / unique_name
+    file_storage.save(destination)
+    return str(destination.relative_to(UPLOAD_ROOT))
+
+
+def normalize_restaurant_menu_font(raw: str | None, *, restaurant_id: int) -> str:
+    value = (raw or "").strip()
+    if not value:
+        return "serif"
+
+    presets = {"serif", "sans", "system"}
+    if value in presets:
+        return value
+
+    try:
+        p = Path(value)
+    except Exception:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректный путь к файлу", status=400)
+
+    if p.is_absolute() or ".." in p.parts:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректный путь к файлу", status=400)
+
+    normalized = p.as_posix().lstrip("/")
+    expected_prefix = f"fonts/r{restaurant_id}/"
+    if not normalized.startswith(expected_prefix):
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректный путь к файлу", status=400)
+
+    full = UPLOAD_ROOT / normalized
+    if not full.is_file():
+        raise ApiUploadError("VALIDATION_ERROR", "Файл не найден", status=400)
+    if full.suffix.lower() not in ALLOWED_FONT_EXTS:
+        raise ApiUploadError("VALIDATION_ERROR", "Неподдерживаемый формат файла", status=400)
+
+    return normalized
+
+
+def normalize_category_image_path(raw: str | None, *, restaurant_id: int) -> str | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+
+    try:
+        p = Path(value)
+    except Exception:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректный путь к файлу", status=400)
+
+    if p.is_absolute() or ".." in p.parts:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректный путь к файлу", status=400)
+
+    normalized = p.as_posix().lstrip("/")
+    expected_prefix = f"categories/r{restaurant_id}/"
+    if not normalized.startswith(expected_prefix):
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректный путь к файлу", status=400)
+
+    full = UPLOAD_ROOT / normalized
+    if not full.is_file():
+        raise ApiUploadError("VALIDATION_ERROR", "Файл не найден", status=400)
+    if full.suffix.lower() not in ALLOWED_CATEGORY_ICON_EXTS:
+        raise ApiUploadError("VALIDATION_ERROR", "Неподдерживаемый формат файла", status=400)
+
+    return normalized
+
+
+def normalize_restaurant_loader_path(raw: str | None, *, restaurant_id: int) -> str | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+
+    try:
+        p = Path(value)
+    except Exception:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректный путь к файлу", status=400)
+
+    if p.is_absolute() or ".." in p.parts:
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректный путь к файлу", status=400)
+
+    normalized = p.as_posix().lstrip("/")
+    expected_prefix = f"loaders/r{restaurant_id}/"
+    if not normalized.startswith(expected_prefix):
+        raise ApiUploadError("VALIDATION_ERROR", "Некорректный путь к файлу", status=400)
+
+    full = UPLOAD_ROOT / normalized
+    if not full.is_file():
+        raise ApiUploadError("VALIDATION_ERROR", "Файл не найден", status=400)
+    if full.suffix.lower() not in ALLOWED_LOADER_EXTS:
+        raise ApiUploadError("VALIDATION_ERROR", "Неподдерживаемый формат файла", status=400)
+
+    return normalized
+
+
 def is_image_filename(name: str | None) -> bool:
     if not name:
         return False
-    return Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+    return Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif"}
 
 def is_admin_user(user: User | None) -> bool:
     if not user:
@@ -1946,8 +3199,31 @@ def api_restaurant_dict(r: Restaurant) -> dict:
         "description": r.description,
         "slug": r.slug,
         "logo_url": r.logo_url(),
+        "phone": getattr(r, "phone", None),
+        "whatsapp": getattr(r, "whatsapp", None),
+        "instagram": getattr(r, "instagram", None),
+        "facebook": getattr(r, "facebook", None),
         "theme": r.theme,
+        "theme_id": getattr(r, "theme_id", None),
+        "theme_overrides_json": getattr(r, "theme_overrides_json", None) or {},
+        "hero_preset_id": getattr(r, "hero_preset_id", None),
+        "hero_overrides_json": getattr(r, "hero_overrides_json", None) or {},
+        "hero": restaurant_effective_hero(r),
+        "menu_card_preset_id": getattr(r, "menu_card_preset_id", None),
+        "menu_card_overrides_json": getattr(r, "menu_card_overrides_json", None) or {},
+        "menu_card_remove_bg_on_upload": bool(getattr(r, "menu_card_remove_bg_on_upload", False)),
+        "menu_card": restaurant_effective_menu_card(r),
         "menu_font": r.menu_font,
+        "menu_font_size": getattr(r, "menu_font_size", None),
+        "menu_font_brand": getattr(r, "menu_font_brand", None),
+        "menu_font_brand_size": getattr(r, "menu_font_brand_size", None),
+        "menu_font_category": getattr(r, "menu_font_category", None),
+        "menu_font_category_size": getattr(r, "menu_font_category_size", None),
+        "menu_font_item": getattr(r, "menu_font_item", None),
+        "menu_font_item_size": getattr(r, "menu_font_item_size", None),
+        "loading_image_path": getattr(r, "loading_image_path", None),
+        "loading_image_url": r.loading_image_url() if hasattr(r, "loading_image_url") else None,
+        "loading_style": getattr(r, "loading_style", None) or "spinner",
     }
 
 
@@ -1956,6 +3232,8 @@ def api_category_dict(c: Category) -> dict:
         "id": c.id,
         "name": c.name,
         "icon_name": c.icon_name,
+        "image_path": getattr(c, "image_path", None),
+        "image_url": c.image_url() if hasattr(c, "image_url") else None,
         "sort_order": c.sort_order,
         "restaurant_id": c.restaurant_id,
     }
@@ -1972,6 +3250,9 @@ def api_dish_dict(d: Dish) -> dict:
         "is_spicy": bool(d.is_spicy),
         "is_vegan": bool(d.is_vegan),
         "image_url": d.image_url(),
+        "image_srcset": d.image_srcset() if hasattr(d, "image_srcset") else None,
+        "image_remove_bg_status": getattr(d, "image_remove_bg_status", None),
+        "use_processed_image": bool(getattr(d, "use_processed_image", False)),
         "category_id": d.category_id,
     }
 
@@ -1982,6 +3263,467 @@ def api_table_dict(t: DiningTable) -> dict:
         "number": t.number,
         "is_occupied": bool(t.is_occupied),
         "restaurant_id": t.restaurant_id,
+    }
+
+
+def sanitize_theme_config(raw: dict | None) -> dict:
+    cfg = raw if isinstance(raw, dict) else {}
+    safe: dict = {}
+
+    vars_raw = cfg.get("vars")
+    if isinstance(vars_raw, dict):
+        safe_vars = {}
+        for k, v in vars_raw.items():
+            if not isinstance(k, str) or not k.startswith("--pm-"):
+                continue
+            if not isinstance(v, str):
+                continue
+            if len(v) > 120:
+                continue
+            safe_vars[k] = v
+        safe["vars"] = safe_vars
+
+    for key in ("category_layout", "transition", "card_style"):
+        v = cfg.get(key)
+        if isinstance(v, str) and len(v) <= 40:
+            safe[key] = v
+
+    return safe
+
+
+def restaurant_effective_theme(restaurant: Restaurant) -> dict:
+    theme_obj = None
+    if getattr(restaurant, "theme_id", None):
+        try:
+            theme_obj = db.session.get(Theme, int(restaurant.theme_id))
+        except Exception:
+            theme_obj = None
+
+    if not theme_obj:
+        theme_obj = Theme.query.filter_by(preset_key=DEFAULT_THEME_PRESET).first()
+
+    base_cfg = sanitize_theme_config(getattr(theme_obj, "config_json", None) if theme_obj else None)
+    overrides_cfg = sanitize_theme_config(getattr(restaurant, "theme_overrides_json", None))
+    merged = deep_merge_dict(base_cfg, overrides_cfg)
+
+    return {
+        "id": getattr(theme_obj, "id", None),
+        "preset_key": getattr(theme_obj, "preset_key", DEFAULT_THEME_PRESET) if theme_obj else DEFAULT_THEME_PRESET,
+        "name": getattr(theme_obj, "name", DEFAULT_THEME_PRESET) if theme_obj else DEFAULT_THEME_PRESET,
+        "vars": merged.get("vars") or {},
+        "category_layout": merged.get("category_layout") or "pills",
+        "transition": merged.get("transition") or "slide",
+        "card_style": merged.get("card_style") or "glass",
+    }
+
+
+ALLOWED_HEADER_EFFECTS = {"glowGradient", "minimal", "sunset", "glass"}
+
+
+def _is_hex_color(value: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    v = value.strip()
+    if not v.startswith("#"):
+        return False
+    if len(v) not in (7, 9):
+        return False
+    for ch in v[1:]:
+        if ch not in "0123456789abcdefABCDEF":
+            return False
+    return True
+
+
+def sanitize_header_style(raw: dict | None, strict: bool = False) -> tuple[dict, dict]:
+    cfg = raw if isinstance(raw, dict) else {}
+    safe: dict = {}
+    errors: dict = {}
+
+    def add_error(key: str, message: str) -> None:
+        if strict:
+            errors[key] = message
+
+    if "headerColor" in cfg:
+        v = cfg.get("headerColor")
+        if isinstance(v, str) and _is_hex_color(v):
+            safe["headerColor"] = v.strip()
+        else:
+            add_error("headerColor", "Некорректный цвет (ожидается #RRGGBB или #RRGGBBAA)")
+
+    if "accentColor" in cfg:
+        v = cfg.get("accentColor")
+        if isinstance(v, str) and _is_hex_color(v):
+            safe["accentColor"] = v.strip()
+        else:
+            add_error("accentColor", "Некорректный цвет (ожидается #RRGGBB или #RRGGBBAA)")
+
+    if "effect" in cfg:
+        v = cfg.get("effect")
+        if isinstance(v, str) and v in ALLOWED_HEADER_EFFECTS:
+            safe["effect"] = v
+        else:
+            add_error("effect", f"Некорректный effect (allowed: {sorted(ALLOWED_HEADER_EFFECTS)})")
+
+    def parse_01(key: str) -> None:
+        if key not in cfg:
+            return
+        v = cfg.get(key)
+        try:
+            num = float(v)
+        except Exception:
+            add_error(key, "Ожидается число 0..1")
+            return
+        if num < 0 or num > 1:
+            add_error(key, "Ожидается число 0..1")
+            return
+        safe[key] = round(num, 4)
+
+    parse_01("glow")
+    parse_01("fade")
+    parse_01("shadow")
+
+    if "radius" in cfg:
+        v = cfg.get("radius")
+        try:
+            num = int(float(v))
+        except Exception:
+            add_error("radius", "Ожидается число 0..40")
+        else:
+            if num < 0 or num > 40:
+                add_error("radius", "Ожидается число 0..40")
+            else:
+                safe["radius"] = num
+
+    return safe, errors
+
+
+def restaurant_effective_header_style(restaurant: Restaurant) -> dict:
+    theme = restaurant_effective_theme(restaurant)
+    vars_cfg = theme.get("vars") or {}
+    base_color = vars_cfg.get("--pm-category") or vars_cfg.get("--pm-accent") or "#F39A1E"
+    base = {
+        "headerColor": base_color if isinstance(base_color, str) else "#F39A1E",
+        "effect": "glowGradient",
+        "glow": 0.55,
+        "fade": 0.75,
+        "radius": 24,
+        "shadow": 0.35,
+        "accentColor": "#FFFFFF33",
+    }
+    overrides, _ = sanitize_header_style(getattr(restaurant, "header_style_json", None), strict=False)
+    base.update(overrides)
+    return base
+
+
+def category_effective_header_style(restaurant: Restaurant, category: Category) -> tuple[dict, dict]:
+    base = restaurant_effective_header_style(restaurant)
+    overrides, _ = sanitize_header_style(getattr(category, "header_style_json", None), strict=False)
+    merged = dict(base)
+    merged.update(overrides)
+    return merged, overrides
+
+
+ALLOWED_HERO_BACKGROUND_MODES = {"solid", "gradient"}
+ALLOWED_HERO_BADGE_SHAPES = {"circle", "rounded", "squircle"}
+
+
+def sanitize_hero_config(raw: dict | None, strict: bool = False) -> tuple[dict, dict]:
+    cfg = raw if isinstance(raw, dict) else {}
+    safe: dict = {}
+    errors: dict = {}
+
+    def add_error(key: str, message: str) -> None:
+        if strict:
+            errors[key] = message
+
+    if "backgroundMode" in cfg:
+        v = cfg.get("backgroundMode")
+        if isinstance(v, str) and v in ALLOWED_HERO_BACKGROUND_MODES:
+            safe["backgroundMode"] = v
+        else:
+            add_error("backgroundMode", f"Некорректный backgroundMode (allowed: {sorted(ALLOWED_HERO_BACKGROUND_MODES)})")
+
+    if "bgSolid" in cfg:
+        v = cfg.get("bgSolid")
+        if isinstance(v, str) and _is_hex_color(v):
+            safe["bgSolid"] = v.strip()
+        else:
+            add_error("bgSolid", "Некорректный bgSolid (ожидается #RRGGBB или #RRGGBBAA)")
+
+    if "bgGradient" in cfg:
+        v = cfg.get("bgGradient")
+        if isinstance(v, (list, tuple)) and len(v) == 2 and all(isinstance(x, str) and _is_hex_color(x) for x in v):
+            safe["bgGradient"] = [v[0].strip(), v[1].strip()]
+        else:
+            add_error("bgGradient", "Некорректный bgGradient (ожидается [\"#RRGGBB\", \"#RRGGBB\"])")
+
+    if "accentColor" in cfg:
+        v = cfg.get("accentColor")
+        if isinstance(v, str) and _is_hex_color(v):
+            safe["accentColor"] = v.strip()
+        else:
+            add_error("accentColor", "Некорректный accentColor (ожидается #RRGGBB или #RRGGBBAA)")
+
+    if "badgeShape" in cfg:
+        v = cfg.get("badgeShape")
+        if isinstance(v, str) and v in ALLOWED_HERO_BADGE_SHAPES:
+            safe["badgeShape"] = v
+        else:
+            add_error("badgeShape", f"Некорректный badgeShape (allowed: {sorted(ALLOWED_HERO_BADGE_SHAPES)})")
+
+    def parse_01(key: str) -> None:
+        if key not in cfg:
+            return
+        v = cfg.get(key)
+        try:
+            num = float(v)
+        except Exception:
+            add_error(key, "Ожидается число 0..1")
+            return
+        if num < 0 or num > 1:
+            add_error(key, "Ожидается число 0..1")
+            return
+        safe[key] = round(num, 4)
+
+    def parse_int_range(key: str, min_value: int, max_value: int) -> None:
+        if key not in cfg:
+            return
+        v = cfg.get(key)
+        try:
+            num = int(float(v))
+        except Exception:
+            add_error(key, f"Ожидается число {min_value}..{max_value}")
+            return
+        if num < min_value or num > max_value:
+            add_error(key, f"Ожидается число {min_value}..{max_value}")
+            return
+        safe[key] = num
+
+    parse_int_range("badgeBlur", 0, 24)
+    parse_01("badgeOpacity")
+    parse_01("badgeBorderOpacity")
+    parse_int_range("logoSize", 40, 120)
+    parse_01("glowStrength")
+    parse_int_range("glowRadius", 0, 60)
+    parse_01("fadeStrength")
+    parse_int_range("paddingTop", 0, 40)
+    parse_int_range("paddingBottom", 0, 48)
+    parse_int_range("radius", 0, 40)
+
+    return safe, errors
+
+
+ALLOWED_MENU_CARD_LAYOUTS = {"grid", "compact"}
+ALLOWED_MENU_CARD_RATIOS = {"1:1", "4:3", "16:9"}
+ALLOWED_MENU_CARD_IMAGE_FITS = {"cover", "contain"}
+ALLOWED_MENU_CARD_IMAGE_BG_MODES = {"solid", "gradient", "surface"}
+ALLOWED_MENU_CARD_VISUAL_PRESETS = {"minimal", "soft", "bold"}
+ALLOWED_MENU_CARD_CORNER_STYLES = {"none", "lines", "brackets", "dots"}
+ALLOWED_MENU_CARD_FRAME_BGS = {"imageBg", "surface", "none"}
+
+
+def sanitize_menu_card_config(raw: dict | None, strict: bool = False) -> tuple[dict, dict]:
+    cfg = raw if isinstance(raw, dict) else {}
+    safe: dict = {}
+    errors: dict = {}
+
+    def add_error(key: str, message: str) -> None:
+        if strict:
+            errors[key] = message
+
+    if "preset" in cfg:
+        v = cfg.get("preset")
+        if isinstance(v, str) and len(v) <= 80:
+            safe["preset"] = v.strip()
+        else:
+            add_error("preset", "Некорректный preset")
+
+    if "layout" in cfg:
+        v = cfg.get("layout")
+        if isinstance(v, str) and v in ALLOWED_MENU_CARD_LAYOUTS:
+            safe["layout"] = v
+        else:
+            add_error("layout", f"Некорректный layout (allowed: {sorted(ALLOWED_MENU_CARD_LAYOUTS)})")
+
+    if "cardPreset" in cfg:
+        v = cfg.get("cardPreset")
+        if isinstance(v, str) and v in ALLOWED_MENU_CARD_VISUAL_PRESETS:
+            safe["cardPreset"] = v
+        else:
+            add_error("cardPreset", f"Некорректный cardPreset (allowed: {sorted(ALLOWED_MENU_CARD_VISUAL_PRESETS)})")
+
+    def parse_int(key: str, min_value: int, max_value: int) -> None:
+        if key not in cfg:
+            return
+        v = cfg.get(key)
+        try:
+            num = int(float(v))
+        except Exception:
+            add_error(key, f"Ожидается число {min_value}..{max_value}")
+            return
+        if num < min_value or num > max_value:
+            add_error(key, f"Ожидается число {min_value}..{max_value}")
+            return
+        safe[key] = num
+
+    def parse_01(key: str) -> None:
+        if key not in cfg:
+            return
+        v = cfg.get(key)
+        try:
+            num = float(v)
+        except Exception:
+            add_error(key, "Ожидается число 0..1")
+            return
+        if num < 0 or num > 1:
+            add_error(key, "Ожидается число 0..1")
+            return
+        safe[key] = round(num, 4)
+
+    parse_int("cardRadius", 0, 28)
+    parse_01("cardBorderOpacity")
+    parse_01("cardShadow")
+    parse_int("imagePadding", 0, 18)
+
+    if "imageRatio" in cfg:
+        v = cfg.get("imageRatio")
+        if isinstance(v, str) and v in ALLOWED_MENU_CARD_RATIOS:
+            safe["imageRatio"] = v
+        else:
+            add_error("imageRatio", f"Некорректный imageRatio (allowed: {sorted(ALLOWED_MENU_CARD_RATIOS)})")
+
+    if "imageFit" in cfg:
+        v = cfg.get("imageFit")
+        if isinstance(v, str) and v in ALLOWED_MENU_CARD_IMAGE_FITS:
+            safe["imageFit"] = v
+        else:
+            add_error("imageFit", f"Некорректный imageFit (allowed: {sorted(ALLOWED_MENU_CARD_IMAGE_FITS)})")
+
+    if "imageBgMode" in cfg:
+        v = cfg.get("imageBgMode")
+        if isinstance(v, str) and v in ALLOWED_MENU_CARD_IMAGE_BG_MODES:
+            safe["imageBgMode"] = v
+        else:
+            add_error("imageBgMode", f"Некорректный imageBgMode (allowed: {sorted(ALLOWED_MENU_CARD_IMAGE_BG_MODES)})")
+
+    if "imageBgColors" in cfg:
+        v = cfg.get("imageBgColors")
+        if isinstance(v, (list, tuple)) and len(v) == 2 and all(isinstance(x, str) and _is_hex_color(x) for x in v):
+            safe["imageBgColors"] = [v[0].strip(), v[1].strip()]
+        else:
+            add_error("imageBgColors", "Некорректный imageBgColors (ожидается [\"#RRGGBB\", \"#RRGGBB\"])")
+
+    if "cornerStyle" in cfg:
+        v = cfg.get("cornerStyle")
+        if isinstance(v, str) and v in ALLOWED_MENU_CARD_CORNER_STYLES:
+            safe["cornerStyle"] = v
+        else:
+            add_error("cornerStyle", f"Некорректный cornerStyle (allowed: {sorted(ALLOWED_MENU_CARD_CORNER_STYLES)})")
+
+    if "cornerColor" in cfg:
+        v = cfg.get("cornerColor")
+        if isinstance(v, str) and (v == "accent" or _is_hex_color(v)):
+            safe["cornerColor"] = v.strip()
+        else:
+            add_error("cornerColor", "Некорректный cornerColor (ожидается \"accent\" или #RRGGBB/#RRGGBBAA)")
+
+    if "frame" in cfg:
+        v = cfg.get("frame")
+        if isinstance(v, dict):
+            frame_safe: dict = {}
+            bg = v.get("bg")
+            if bg is not None:
+                if isinstance(bg, str) and bg in ALLOWED_MENU_CARD_FRAME_BGS:
+                    frame_safe["bg"] = bg
+                else:
+                    add_error("frame.bg", f"Некорректный frame.bg (allowed: {sorted(ALLOWED_MENU_CARD_FRAME_BGS)})")
+
+            border = v.get("border")
+            if border is not None:
+                try:
+                    num = float(border)
+                except Exception:
+                    add_error("frame.border", "Ожидается число 0..1")
+                else:
+                    if num < 0 or num > 1:
+                        add_error("frame.border", "Ожидается число 0..1")
+                    else:
+                        frame_safe["border"] = round(num, 4)
+
+            if frame_safe:
+                safe["frame"] = frame_safe
+        else:
+            add_error("frame", "Некорректный frame (ожидается объект)")
+
+    return safe, errors
+
+
+def restaurant_effective_menu_card(restaurant: Restaurant) -> dict:
+    preset = None
+    try:
+        if getattr(restaurant, "menu_card_preset_id", None):
+            preset = db.session.get(MenuCardPreset, int(restaurant.menu_card_preset_id))
+    except Exception:
+        preset = None
+
+    if not preset:
+        preset = MenuCardPreset.query.filter_by(key=DEFAULT_MENU_CARD_PRESET_KEY).first()
+
+    base_cfg = sanitize_menu_card_config(getattr(preset, "config_json", None) if preset else None, strict=False)[0]
+    overrides_cfg = sanitize_menu_card_config(getattr(restaurant, "menu_card_overrides_json", None), strict=False)[0]
+    merged = deep_merge_dict(base_cfg, overrides_cfg)
+
+    return {
+        "preset_id": getattr(preset, "id", None),
+        "preset_key": getattr(preset, "key", DEFAULT_MENU_CARD_PRESET_KEY) if preset else DEFAULT_MENU_CARD_PRESET_KEY,
+        "name": getattr(preset, "name", DEFAULT_MENU_CARD_PRESET_KEY) if preset else DEFAULT_MENU_CARD_PRESET_KEY,
+        "config": merged,
+        "overrides": overrides_cfg,
+        "remove_bg_on_upload": bool(getattr(restaurant, "menu_card_remove_bg_on_upload", False)),
+    }
+
+
+def api_hero_preset_dict(p: HeroPreset) -> dict:
+    return {
+        "id": p.id,
+        "name": p.name,
+        "key": p.key,
+        "is_builtin": bool(p.is_builtin),
+        "config_json": sanitize_hero_config(getattr(p, "config_json", None), strict=False)[0],
+    }
+
+
+def api_menu_card_preset_dict(p: MenuCardPreset) -> dict:
+    return {
+        "id": p.id,
+        "name": p.name,
+        "key": p.key,
+        "is_builtin": bool(getattr(p, "is_builtin", False)),
+        "config_json": sanitize_menu_card_config(getattr(p, "config_json", None), strict=False)[0],
+    }
+
+
+def restaurant_effective_hero(restaurant: Restaurant) -> dict:
+    preset = None
+    try:
+        if getattr(restaurant, "hero_preset_id", None):
+            preset = db.session.get(HeroPreset, int(restaurant.hero_preset_id))
+    except Exception:
+        preset = None
+
+    if not preset:
+        preset = HeroPreset.query.filter_by(key=DEFAULT_HERO_PRESET_KEY).first()
+
+    base_cfg = sanitize_hero_config(getattr(preset, "config_json", None) if preset else None, strict=False)[0]
+    overrides_cfg = sanitize_hero_config(getattr(restaurant, "hero_overrides_json", None), strict=False)[0]
+    merged = dict(base_cfg)
+    merged.update(overrides_cfg)
+
+    return {
+        "preset_id": getattr(preset, "id", None),
+        "preset_key": getattr(preset, "key", DEFAULT_HERO_PRESET_KEY) if preset else DEFAULT_HERO_PRESET_KEY,
+        "name": getattr(preset, "name", DEFAULT_HERO_PRESET_KEY) if preset else DEFAULT_HERO_PRESET_KEY,
+        "config": merged,
     }
 
 
@@ -2110,18 +3852,44 @@ def api_admin_restaurants_create():
     slug_raw = (data.get("slug") or "").strip()
 
     theme = (data.get("theme") or "classic").strip()
-    menu_font = (data.get("menu_font") or "serif").strip()
+    menu_font_raw = (data.get("menu_font") or "serif").strip()
+    menu_font_size = api_parse_int(data.get("menu_font_size")) or 16
+    if menu_font_size < 12:
+        menu_font_size = 12
+    if menu_font_size > 26:
+        menu_font_size = 26
+
+    phone = (data.get("phone") or "").strip() or None
+    whatsapp = (data.get("whatsapp") or "").strip() or None
+    instagram = (data.get("instagram") or "").strip() or None
+    facebook = (data.get("facebook") or "").strip() or None
+    loading_style = (data.get("loading_style") or "spinner").strip() or "spinner"
+    if loading_style not in ALLOWED_LOADER_STYLES:
+        loading_style = "spinner"
 
     if not name:
         return api_error("VALIDATION_ERROR", "Поле name обязательно", status=400)
 
     slug_value = unique_slug(slug_raw or name)
+    try:
+        menu_font = normalize_restaurant_menu_font(menu_font_raw, restaurant_id=0)
+    except ApiUploadError:
+        menu_font = "serif"
+
+    default_theme = Theme.query.filter_by(preset_key=DEFAULT_THEME_PRESET).first()
 
     restaurant = Restaurant(
         name=name,
         description=description,
+        phone=phone,
+        whatsapp=whatsapp,
+        instagram=instagram,
+        facebook=facebook,
         theme=theme,
         menu_font=menu_font,
+        menu_font_size=menu_font_size,
+        loading_style=loading_style,
+        theme_id=default_theme.id if default_theme else None,
         slug=slug_value,
         owner=current_user,
     )
@@ -2151,13 +3919,470 @@ def api_admin_restaurant_update(restaurant_id: int):
         restaurant.name = (data.get("name") or "").strip() or restaurant.name
     if "description" in data:
         restaurant.description = (data.get("description") or "").strip() or None
+    if "phone" in data:
+        restaurant.phone = (data.get("phone") or "").strip() or None
+    if "whatsapp" in data:
+        restaurant.whatsapp = (data.get("whatsapp") or "").strip() or None
+    if "instagram" in data:
+        restaurant.instagram = (data.get("instagram") or "").strip() or None
+    if "facebook" in data:
+        restaurant.facebook = (data.get("facebook") or "").strip() or None
     if "theme" in data:
         restaurant.theme = (data.get("theme") or "").strip() or restaurant.theme
     if "menu_font" in data:
-        restaurant.menu_font = (data.get("menu_font") or "").strip() or restaurant.menu_font
+        try:
+            restaurant.menu_font = normalize_restaurant_menu_font(data.get("menu_font"), restaurant_id=restaurant.id)
+        except ApiUploadError as e:
+            return api_error(e.code, e.message, status=e.status, details=e.details)
+    if "menu_font_size" in data:
+        size = api_parse_int(data.get("menu_font_size"))
+        if size is None:
+            return api_error("VALIDATION_ERROR", "Некорректный размер шрифта", status=400)
+        if size < 12:
+            size = 12
+        if size > 26:
+            size = 26
+        restaurant.menu_font_size = size
+
+    if "menu_font_brand" in data:
+        raw = (data.get("menu_font_brand") or "").strip()
+        if not raw:
+            restaurant.menu_font_brand = None
+        else:
+            try:
+                restaurant.menu_font_brand = normalize_restaurant_menu_font(raw, restaurant_id=restaurant.id)
+            except ApiUploadError as e:
+                return api_error(e.code, e.message, status=e.status, details=e.details)
+    if "menu_font_brand_size" in data:
+        size = api_parse_int(data.get("menu_font_brand_size"))
+        restaurant.menu_font_brand_size = None if size is None else max(12, min(60, size))
+
+    if "menu_font_category" in data:
+        raw = (data.get("menu_font_category") or "").strip()
+        if not raw:
+            restaurant.menu_font_category = None
+        else:
+            try:
+                restaurant.menu_font_category = normalize_restaurant_menu_font(raw, restaurant_id=restaurant.id)
+            except ApiUploadError as e:
+                return api_error(e.code, e.message, status=e.status, details=e.details)
+    if "menu_font_category_size" in data:
+        size = api_parse_int(data.get("menu_font_category_size"))
+        restaurant.menu_font_category_size = None if size is None else max(10, min(40, size))
+
+    if "menu_font_item" in data:
+        raw = (data.get("menu_font_item") or "").strip()
+        if not raw:
+            restaurant.menu_font_item = None
+        else:
+            try:
+                restaurant.menu_font_item = normalize_restaurant_menu_font(raw, restaurant_id=restaurant.id)
+            except ApiUploadError as e:
+                return api_error(e.code, e.message, status=e.status, details=e.details)
+    if "menu_font_item_size" in data:
+        size = api_parse_int(data.get("menu_font_item_size"))
+        restaurant.menu_font_item_size = None if size is None else max(10, min(28, size))
+
+    if "loading_style" in data:
+        style = (data.get("loading_style") or "").strip() or "spinner"
+        if style not in ALLOWED_LOADER_STYLES:
+            return api_error(
+                "VALIDATION_ERROR",
+                "Некорректный стиль загрузки",
+                status=400,
+                details={"allowed": sorted(ALLOWED_LOADER_STYLES)},
+            )
+        restaurant.loading_style = style
+
+    if "loading_image_path" in data:
+        raw = (data.get("loading_image_path") or "").strip()
+        if not raw:
+            restaurant.loading_image_path = None
+        else:
+            try:
+                restaurant.loading_image_path = normalize_restaurant_loader_path(raw, restaurant_id=restaurant.id)
+            except ApiUploadError as e:
+                return api_error(e.code, e.message, status=e.status, details=e.details)
 
     db.session.commit()
     return api_success({"restaurant": api_restaurant_dict(restaurant)})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/theme", methods=["PUT"])
+@login_required
+def api_admin_restaurant_theme_update(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    data = request.get_json(silent=True) or {}
+    theme_id = api_parse_int(data.get("theme_id"))
+    overrides = data.get("overrides") if isinstance(data.get("overrides"), dict) else data.get("theme_overrides_json")
+    overrides = overrides if isinstance(overrides, dict) else {}
+
+    if not theme_id:
+        return api_error("VALIDATION_ERROR", "theme_id обязателен", status=400)
+
+    theme_obj = db.session.get(Theme, int(theme_id))
+    if not theme_obj:
+        return api_error("NOT_FOUND", "Тема не найдена", status=404)
+
+    restaurant.theme_id = int(theme_id)
+    restaurant.theme_overrides_json = sanitize_theme_config(overrides)
+    db.session.commit()
+    return api_success({"restaurant": api_restaurant_dict(restaurant)})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/header-style")
+@login_required
+def api_admin_restaurant_header_style_get(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    effective = restaurant_effective_header_style(restaurant)
+    overrides, _ = sanitize_header_style(getattr(restaurant, "header_style_json", None), strict=False)
+    return api_success({"header_style": effective, "overrides": overrides})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/header-style", methods=["PUT"])
+@login_required
+def api_admin_restaurant_header_style_put(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    payload = request.get_json(silent=True)
+    if payload is None:
+        raw = (request.get_data() or b"").strip()
+        if raw == b"null":
+            restaurant.header_style_json = None
+            db.session.commit()
+            return api_success({"header_style": restaurant_effective_header_style(restaurant), "overrides": {}})
+        return api_error("VALIDATION_ERROR", "Некорректный JSON", status=400)
+
+    if not isinstance(payload, dict):
+        return api_error("VALIDATION_ERROR", "Ожидается объект JSON или null", status=400)
+
+    safe, errors = sanitize_header_style(payload, strict=True)
+    if errors:
+        return api_error("VALIDATION_ERROR", "Некорректные значения", status=400, details=errors)
+
+    restaurant.header_style_json = safe or None
+    db.session.commit()
+    effective = restaurant_effective_header_style(restaurant)
+    return api_success({"header_style": effective, "overrides": safe})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/hero")
+@login_required
+def api_admin_restaurant_hero_get(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+    overrides, _ = sanitize_hero_config(getattr(restaurant, "hero_overrides_json", None), strict=False)
+    return api_success({"hero": restaurant_effective_hero(restaurant), "overrides": overrides})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/hero", methods=["PUT"])
+@login_required
+def api_admin_restaurant_hero_put(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    data = request.get_json(silent=True) or {}
+    preset_id = api_parse_int(data.get("hero_preset_id") or data.get("preset_id"))
+    overrides = data.get("hero_overrides_json") if isinstance(data.get("hero_overrides_json"), dict) else data.get("overrides")
+    overrides = overrides if isinstance(overrides, dict) else {}
+
+    if not preset_id:
+        return api_error("VALIDATION_ERROR", "hero_preset_id обязателен", status=400)
+
+    preset = db.session.get(HeroPreset, int(preset_id))
+    if not preset:
+        return api_error("NOT_FOUND", "Hero preset не найден", status=404)
+
+    safe_overrides, errors = sanitize_hero_config(overrides, strict=True)
+    if errors:
+        return api_error("VALIDATION_ERROR", "Некорректные значения", status=400, details=errors)
+
+    restaurant.hero_preset_id = int(preset_id)
+    restaurant.hero_overrides_json = safe_overrides or None
+    db.session.commit()
+    return api_success({"restaurant": api_restaurant_dict(restaurant)})
+
+
+@app.route("/api/admin/menu-card-presets")
+@login_required
+def api_admin_menu_card_presets_list():
+    items = MenuCardPreset.query.order_by(MenuCardPreset.id.asc()).all()
+    return api_success({"items": [api_menu_card_preset_dict(p) for p in items]})
+
+
+def _normalize_menu_card_preset_key(raw: str) -> str | None:
+    key = (raw or "").strip()
+    if not key or len(key) > 80:
+        return None
+    for ch in key:
+        if ch.isalnum() or ch in ("_", "-"):
+            continue
+        return None
+    return key
+
+
+@app.route("/api/admin/menu-card-presets", methods=["POST"])
+@login_required
+def api_admin_menu_card_presets_create():
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    key = _normalize_menu_card_preset_key(data.get("key") or data.get("preset_key") or "")
+    raw_cfg = data.get("config_json") if isinstance(data.get("config_json"), dict) else {}
+
+    if not name or not key:
+        return api_error("VALIDATION_ERROR", "name и key обязательны", status=400)
+
+    if MenuCardPreset.query.filter_by(key=key).first():
+        return api_error("CONFLICT", "key уже существует", status=409)
+
+    safe_cfg, errors = sanitize_menu_card_config(raw_cfg, strict=True)
+    if errors:
+        return api_error("VALIDATION_ERROR", "Некорректные значения", status=400, details=errors)
+
+    preset = MenuCardPreset(name=name, key=key, is_builtin=False, config_json=safe_cfg)
+    db.session.add(preset)
+    db.session.commit()
+    return api_success({"preset": api_menu_card_preset_dict(preset)}, status=201)
+
+
+@app.route("/api/admin/menu-card-presets/<int:preset_id>/duplicate", methods=["POST"])
+@login_required
+def api_admin_menu_card_presets_duplicate(preset_id: int):
+    preset = db.session.get(MenuCardPreset, preset_id)
+    if not preset:
+        return api_error("NOT_FOUND", "Card preset не найден", status=404)
+
+    base_key = _normalize_menu_card_preset_key(preset.key or "") or f"preset_{preset.id}"
+    new_key = f"{base_key}_{secrets.token_hex(3)}"
+    new_name = f"{preset.name} Copy"
+
+    safe_cfg = sanitize_menu_card_config(getattr(preset, "config_json", None), strict=False)[0]
+    clone = MenuCardPreset(name=new_name, key=new_key, is_builtin=False, config_json=safe_cfg)
+    db.session.add(clone)
+    db.session.commit()
+    return api_success({"preset": api_menu_card_preset_dict(clone)}, status=201)
+
+
+@app.route("/api/admin/menu-card-presets/<int:preset_id>", methods=["PUT"])
+@login_required
+def api_admin_menu_card_presets_update(preset_id: int):
+    preset = db.session.get(MenuCardPreset, preset_id)
+    if not preset:
+        return api_error("NOT_FOUND", "Card preset не найден", status=404)
+
+    if getattr(preset, "is_builtin", False):
+        return api_error("FORBIDDEN", "Нельзя редактировать встроенный preset", status=403)
+
+    data = request.get_json(silent=True) or {}
+    if "name" in data:
+        preset.name = (data.get("name") or "").strip() or preset.name
+    if "config_json" in data:
+        raw_cfg = data.get("config_json") if isinstance(data.get("config_json"), dict) else {}
+        safe_cfg, errors = sanitize_menu_card_config(raw_cfg, strict=True)
+        if errors:
+            return api_error("VALIDATION_ERROR", "Некорректные значения", status=400, details=errors)
+        preset.config_json = safe_cfg
+
+    db.session.commit()
+    return api_success({"preset": api_menu_card_preset_dict(preset)})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/menu-cards")
+@login_required
+def api_admin_restaurant_menu_cards_get(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    overrides, _ = sanitize_menu_card_config(getattr(restaurant, "menu_card_overrides_json", None), strict=False)
+    return api_success(
+        {
+            "menu_card": restaurant_effective_menu_card(restaurant),
+            "overrides": overrides,
+            "menu_card_remove_bg_on_upload": bool(getattr(restaurant, "menu_card_remove_bg_on_upload", False)),
+        }
+    )
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/menu-cards", methods=["PUT"])
+@login_required
+def api_admin_restaurant_menu_cards_put(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    data = request.get_json(silent=True) or {}
+    preset_id = api_parse_int(data.get("menu_card_preset_id") or data.get("preset_id"))
+    overrides = data.get("menu_card_overrides_json") if isinstance(data.get("menu_card_overrides_json"), dict) else data.get("overrides")
+    overrides = overrides if isinstance(overrides, dict) else {}
+    remove_bg = data.get("remove_bg_on_upload")
+    if remove_bg is None:
+        remove_bg = data.get("menu_card_remove_bg_on_upload")
+
+    if not preset_id:
+        return api_error("VALIDATION_ERROR", "menu_card_preset_id обязателен", status=400)
+
+    preset = db.session.get(MenuCardPreset, int(preset_id))
+    if not preset:
+        return api_error("NOT_FOUND", "Card preset не найден", status=404)
+
+    safe_overrides, errors = sanitize_menu_card_config(overrides, strict=True)
+    if errors:
+        return api_error("VALIDATION_ERROR", "Некорректные значения", status=400, details=errors)
+
+    restaurant.menu_card_preset_id = int(preset_id)
+    restaurant.menu_card_overrides_json = safe_overrides or None
+    if remove_bg is not None:
+        restaurant.menu_card_remove_bg_on_upload = api_parse_bool(remove_bg, False)
+
+    db.session.commit()
+    return api_success({"restaurant": api_restaurant_dict(restaurant)})
+
+
+@app.route("/api/admin/themes")
+@login_required
+def api_admin_themes_list():
+    themes = Theme.query.order_by(Theme.id.asc()).all()
+    return api_success({"items": [api_theme_dict(t) for t in themes]})
+
+
+@app.route("/api/admin/themes", methods=["POST"])
+@login_required
+def api_admin_themes_create():
+    if not is_admin_user(current_user):
+        return api_error("FORBIDDEN", "Доступ запрещён", status=403)
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    preset_key = (data.get("preset_key") or "").strip()
+    config = data.get("config_json")
+    config = config if isinstance(config, dict) else {}
+
+    if not name or not preset_key:
+        return api_error("VALIDATION_ERROR", "name и preset_key обязательны", status=400)
+
+    if Theme.query.filter_by(preset_key=preset_key).first():
+        return api_error("CONFLICT", "preset_key уже существует", status=409)
+
+    theme = Theme(name=name, preset_key=preset_key, config_json=sanitize_theme_config(config))
+    db.session.add(theme)
+    db.session.commit()
+    return api_success({"theme": api_theme_dict(theme)}, status=201)
+
+
+@app.route("/api/admin/themes/<int:theme_id>", methods=["PUT"])
+@login_required
+def api_admin_themes_update(theme_id: int):
+    if not is_admin_user(current_user):
+        return api_error("FORBIDDEN", "Доступ запрещён", status=403)
+
+    theme = db.session.get(Theme, theme_id)
+    if not theme:
+        return api_error("NOT_FOUND", "Тема не найдена", status=404)
+
+    data = request.get_json(silent=True) or {}
+    if "name" in data:
+        theme.name = (data.get("name") or "").strip() or theme.name
+    if "config_json" in data:
+        cfg = data.get("config_json")
+        theme.config_json = sanitize_theme_config(cfg if isinstance(cfg, dict) else {})
+
+    db.session.commit()
+    return api_success({"theme": api_theme_dict(theme)})
+
+
+@app.route("/api/admin/hero-presets")
+@login_required
+def api_admin_hero_presets_list():
+    items = HeroPreset.query.order_by(HeroPreset.id.asc()).all()
+    return api_success({"items": [api_hero_preset_dict(p) for p in items]})
+
+
+def _normalize_hero_preset_key(raw: str) -> str | None:
+    key = (raw or "").strip()
+    if not key or len(key) > 80:
+        return None
+    for ch in key:
+        if ch.isalnum() or ch in ("_", "-"):
+            continue
+        return None
+    return key
+
+
+@app.route("/api/admin/hero-presets", methods=["POST"])
+@login_required
+def api_admin_hero_presets_create():
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    key = _normalize_hero_preset_key(data.get("key") or data.get("preset_key") or "")
+    raw_cfg = data.get("config_json") if isinstance(data.get("config_json"), dict) else {}
+
+    if not name or not key:
+        return api_error("VALIDATION_ERROR", "name и key обязательны", status=400)
+
+    if HeroPreset.query.filter_by(key=key).first():
+        return api_error("CONFLICT", "key уже существует", status=409)
+
+    safe_cfg, errors = sanitize_hero_config(raw_cfg, strict=True)
+    if errors:
+        return api_error("VALIDATION_ERROR", "Некорректные значения", status=400, details=errors)
+
+    preset = HeroPreset(name=name, key=key, is_builtin=False, config_json=safe_cfg)
+    db.session.add(preset)
+    db.session.commit()
+    return api_success({"preset": api_hero_preset_dict(preset)}, status=201)
+
+
+@app.route("/api/admin/hero-presets/<int:preset_id>/duplicate", methods=["POST"])
+@login_required
+def api_admin_hero_presets_duplicate(preset_id: int):
+    preset = db.session.get(HeroPreset, preset_id)
+    if not preset:
+        return api_error("NOT_FOUND", "Hero preset не найден", status=404)
+
+    base_key = _normalize_hero_preset_key(preset.key or "") or f"preset_{preset.id}"
+    new_key = f"{base_key}_{secrets.token_hex(3)}"
+    new_name = f"{preset.name} Copy"
+
+    safe_cfg = sanitize_hero_config(getattr(preset, "config_json", None), strict=False)[0]
+    clone = HeroPreset(name=new_name, key=new_key, is_builtin=False, config_json=safe_cfg)
+    db.session.add(clone)
+    db.session.commit()
+    return api_success({"preset": api_hero_preset_dict(clone)}, status=201)
+
+
+@app.route("/api/admin/hero-presets/<int:preset_id>", methods=["PUT"])
+@login_required
+def api_admin_hero_presets_update(preset_id: int):
+    preset = db.session.get(HeroPreset, preset_id)
+    if not preset:
+        return api_error("NOT_FOUND", "Hero preset не найден", status=404)
+
+    if getattr(preset, "is_builtin", False):
+        return api_error("FORBIDDEN", "Нельзя редактировать встроенный preset", status=403)
+
+    data = request.get_json(silent=True) or {}
+    if "name" in data:
+        preset.name = (data.get("name") or "").strip() or preset.name
+    if "config_json" in data:
+        raw_cfg = data.get("config_json") if isinstance(data.get("config_json"), dict) else {}
+        safe_cfg, errors = sanitize_hero_config(raw_cfg, strict=True)
+        if errors:
+            return api_error("VALIDATION_ERROR", "Некорректные значения", status=400, details=errors)
+        preset.config_json = safe_cfg
+
+    db.session.commit()
+    return api_success({"preset": api_hero_preset_dict(preset)})
 
 
 @app.route("/api/admin/restaurants/<int:restaurant_id>/logo", methods=["POST"])
@@ -2166,13 +4391,222 @@ def api_admin_restaurant_logo(restaurant_id: int):
     restaurant = db.session.get(Restaurant, restaurant_id)
     if not restaurant or not has_restaurant_access(restaurant):
         return api_error("NOT_FOUND", "Ресторан не найден", status=404)
-    file = request.files.get("logo")
+    file = request.files.get("file") or request.files.get("logo")
+    old_logo = getattr(restaurant, "logo_filename", None)
     try:
-        restaurant.logo_filename = save_image_upload(file, LOGO_FOLDER, field_name="logo")
+        restaurant.logo_filename = save_logo_upload(file, LOGO_FOLDER, field_name="logo")
     except ApiUploadError as e:
         return api_error(e.code, e.message, status=e.status, details=e.details)
     db.session.commit()
+    if old_logo and old_logo != restaurant.logo_filename:
+        safe_delete_uploaded_file(old_logo, required_top_dir="logos")
     return api_success({"restaurant": api_restaurant_dict(restaurant)})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/logo", methods=["DELETE"])
+@login_required
+def api_admin_restaurant_logo_delete(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+    old_logo = getattr(restaurant, "logo_filename", None)
+    restaurant.logo_filename = None
+    db.session.commit()
+    if old_logo:
+        safe_delete_uploaded_file(old_logo, required_top_dir="logos")
+    return api_success({"restaurant": api_restaurant_dict(restaurant)})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/qr")
+@login_required
+def api_admin_restaurant_qr(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    menu_url = url_for("public_menu", slug=restaurant.slug, _external=True)
+    qr_path = QR_FOLDER / f"restaurant_{restaurant.id}.png"
+    force = str(request.args.get("force") or "").strip() == "1"
+
+    if force or not qr_path.is_file():
+        img = qrcode.make(menu_url)
+        img.save(qr_path)
+
+    qr_filename = str(qr_path.relative_to(UPLOAD_ROOT))
+    return api_success(
+        {
+            "menu_url": menu_url,
+            "qr_path": qr_filename,
+            "qr_url": url_for("uploaded_file", filename=qr_filename),
+        }
+    )
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/fonts")
+@login_required
+def api_admin_restaurant_fonts(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    folder = FONT_FOLDER / f"r{restaurant.id}"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    items = []
+    for p in sorted(folder.glob("*")):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in ALLOWED_FONT_EXTS:
+            continue
+        rel = str(p.relative_to(UPLOAD_ROOT))
+        items.append(
+            {
+                "path": rel,
+                "filename": p.name,
+                "url": url_for("uploaded_file", filename=rel),
+            }
+        )
+    return api_success({"items": items})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/fonts/upload", methods=["POST"])
+@login_required
+def api_admin_restaurant_fonts_upload(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    file = request.files.get("file") or request.files.get("font")
+    folder = FONT_FOLDER / f"r{restaurant.id}"
+    try:
+        rel = save_font_upload(file, folder, field_name="file")
+    except ApiUploadError as e:
+        return api_error(e.code, e.message, status=e.status, details=e.details)
+
+    return api_success(
+        {
+            "ok": True,
+            "path": rel,
+            "filename": Path(rel).name,
+            "url": url_for("uploaded_file", filename=rel),
+        }
+    )
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/fonts", methods=["DELETE"])
+@login_required
+def api_admin_restaurant_fonts_delete(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    raw = (request.args.get("path") or "").strip()
+    if not raw:
+        return api_error("VALIDATION_ERROR", "path обязателен", status=400)
+
+    try:
+        p = Path(raw)
+    except Exception:
+        return api_error("VALIDATION_ERROR", "Некорректный путь", status=400)
+
+    if p.is_absolute() or ".." in p.parts:
+        return api_error("VALIDATION_ERROR", "Некорректный путь", status=400)
+
+    normalized = p.as_posix().lstrip("/")
+    expected_prefix = f"fonts/r{restaurant.id}/"
+    if not normalized.startswith(expected_prefix):
+        return api_error("VALIDATION_ERROR", "Некорректный путь", status=400)
+
+    full = UPLOAD_ROOT / normalized
+    if not full.is_file():
+        return api_error("NOT_FOUND", "Файл не найден", status=404)
+    if full.suffix.lower() not in ALLOWED_FONT_EXTS:
+        return api_error("VALIDATION_ERROR", "Неподдерживаемый формат файла", status=400)
+
+    try:
+        full.unlink()
+    except Exception:
+        return api_error("INTERNAL_ERROR", "Не удалось удалить файл", status=500)
+
+    # If the restaurant was using this font, revert to default.
+    if restaurant.menu_font == normalized:
+        restaurant.menu_font = "serif"
+        db.session.commit()
+
+    return api_success({"ok": True})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/loaders")
+@login_required
+def api_admin_restaurant_loaders(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    folder = LOADER_FOLDER / f"r{restaurant.id}"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    items = []
+    for p in sorted(folder.glob("*")):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in ALLOWED_LOADER_EXTS:
+            continue
+        rel = str(p.relative_to(UPLOAD_ROOT))
+        items.append({"path": rel, "filename": p.name, "url": url_for("uploaded_file", filename=rel)})
+    return api_success({"items": items})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/loaders/upload", methods=["POST"])
+@login_required
+def api_admin_restaurant_loaders_upload(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    file = request.files.get("file") or request.files.get("loader")
+    folder = LOADER_FOLDER / f"r{restaurant.id}"
+    try:
+        rel = save_loader_upload(file, folder, field_name="file")
+    except ApiUploadError as e:
+        return api_error(e.code, e.message, status=e.status, details=e.details)
+
+    return api_success({"ok": True, "path": rel, "filename": Path(rel).name, "url": url_for("uploaded_file", filename=rel)})
+
+
+@app.route("/api/admin/restaurants/<int:restaurant_id>/loaders", methods=["DELETE"])
+@login_required
+def api_admin_restaurant_loaders_delete(restaurant_id: int):
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    raw = (request.args.get("path") or "").strip()
+    if not raw:
+        return api_error("VALIDATION_ERROR", "path обязателен", status=400)
+
+    try:
+        normalized = normalize_restaurant_loader_path(raw, restaurant_id=restaurant.id)
+    except ApiUploadError as e:
+        return api_error(e.code, e.message, status=e.status, details=e.details)
+
+    if not normalized:
+        return api_error("VALIDATION_ERROR", "Некорректный путь", status=400)
+
+    full = UPLOAD_ROOT / normalized
+    if not full.is_file():
+        return api_error("NOT_FOUND", "Файл не найден", status=404)
+
+    try:
+        full.unlink()
+    except Exception:
+        return api_error("INTERNAL_ERROR", "Не удалось удалить файл", status=500)
+
+    if getattr(restaurant, "loading_image_path", None) == normalized:
+        restaurant.loading_image_path = None
+        db.session.commit()
+
+    return api_success({"ok": True})
 
 
 @app.route("/api/admin/restaurants/<int:restaurant_id>/categories")
@@ -2200,6 +4634,10 @@ def api_admin_categories_create(restaurant_id: int):
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
     icon_name = (data.get("icon_name") or "").strip() or None
+    try:
+        image_path = normalize_category_image_path(data.get("image_path"), restaurant_id=restaurant.id)
+    except ApiUploadError as e:
+        return api_error(e.code, e.message, status=e.status, details=e.details)
     if not name:
         return api_error("VALIDATION_ERROR", "Поле name обязательно", status=400)
 
@@ -2212,12 +4650,119 @@ def api_admin_categories_create(restaurant_id: int):
     cat = Category(
         name=name,
         icon_name=icon_name,
+        image_path=image_path,
         restaurant_id=restaurant.id,
         sort_order=max_sort + 1,
     )
     db.session.add(cat)
     db.session.commit()
     return api_success({"category": api_category_dict(cat)}, status=201)
+
+
+@app.route("/api/admin/categories/icons")
+@login_required
+def api_admin_category_icons():
+    restaurant_id = api_parse_int(request.args.get("restaurant_id"))
+    if not restaurant_id:
+        return api_error("VALIDATION_ERROR", "restaurant_id обязателен", status=400)
+
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    folder = CATEGORY_FOLDER / f"r{restaurant_id}"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    items = []
+    for p in sorted(folder.glob("*")):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in ALLOWED_CATEGORY_ICON_EXTS:
+            continue
+        rel = str(p.relative_to(UPLOAD_ROOT))
+        items.append(
+            {
+                "path": rel,
+                "filename": p.name,
+                "url": url_for("uploaded_file", filename=rel),
+            }
+        )
+
+    return api_success({"items": items})
+
+
+@app.route("/api/admin/categories/icons", methods=["DELETE"])
+@login_required
+def api_admin_category_icons_delete():
+    restaurant_id = api_parse_int(request.args.get("restaurant_id"))
+    if not restaurant_id:
+        return api_error("VALIDATION_ERROR", "restaurant_id обязателен", status=400)
+
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    raw = (request.args.get("path") or "").strip()
+    if not raw:
+        return api_error("VALIDATION_ERROR", "path обязателен", status=400)
+
+    try:
+        p = Path(raw)
+    except Exception:
+        return api_error("VALIDATION_ERROR", "Некорректный путь", status=400)
+
+    if p.is_absolute() or ".." in p.parts:
+        return api_error("VALIDATION_ERROR", "Некорректный путь", status=400)
+
+    normalized = p.as_posix().lstrip("/")
+    expected_prefix = f"categories/r{restaurant.id}/"
+    if not normalized.startswith(expected_prefix):
+        return api_error("VALIDATION_ERROR", "Некорректный путь", status=400)
+
+    full = UPLOAD_ROOT / normalized
+    if not full.is_file():
+        return api_error("NOT_FOUND", "Файл не найден", status=404)
+    if full.suffix.lower() not in ALLOWED_CATEGORY_ICON_EXTS:
+        return api_error("VALIDATION_ERROR", "Неподдерживаемый формат файла", status=400)
+
+    try:
+        full.unlink()
+    except Exception:
+        return api_error("INTERNAL_ERROR", "Не удалось удалить файл", status=500)
+
+    # Clear category.image_path if it referenced deleted file.
+    Category.query.filter_by(restaurant_id=restaurant.id, image_path=normalized).update({"image_path": None})
+    db.session.commit()
+
+    return api_success({"ok": True})
+
+
+@app.route("/api/admin/categories/upload-icon", methods=["POST"])
+@login_required
+def api_admin_category_upload_icon():
+    restaurant_id = api_parse_int(request.args.get("restaurant_id") or request.form.get("restaurant_id"))
+    if not restaurant_id:
+        return api_error("VALIDATION_ERROR", "restaurant_id обязателен", status=400)
+
+    restaurant = db.session.get(Restaurant, restaurant_id)
+    if not restaurant or not has_restaurant_access(restaurant):
+        return api_error("NOT_FOUND", "Ресторан не найден", status=404)
+
+    file = request.files.get("file") or request.files.get("icon") or request.files.get("image")
+    folder = CATEGORY_FOLDER / f"r{restaurant_id}"
+    try:
+        rel = save_category_icon_upload(file, folder, field_name="file")
+    except ApiUploadError as e:
+        return api_error(e.code, e.message, status=e.status, details=e.details)
+
+    return api_success(
+        {
+            "ok": True,
+            "path": rel,
+            "filename": Path(rel).name,
+            "url": url_for("uploaded_file", filename=rel),
+        }
+    )
 
 
 @app.route("/api/admin/categories/<int:category_id>", methods=["PATCH"])
@@ -2232,8 +4777,54 @@ def api_admin_category_update(category_id: int):
         cat.name = (data.get("name") or "").strip() or cat.name
     if "icon_name" in data:
         cat.icon_name = (data.get("icon_name") or "").strip() or None
+    if "image_path" in data:
+        try:
+            cat.image_path = normalize_category_image_path(data.get("image_path"), restaurant_id=cat.restaurant_id)
+        except ApiUploadError as e:
+            return api_error(e.code, e.message, status=e.status, details=e.details)
     db.session.commit()
     return api_success({"category": api_category_dict(cat)})
+
+
+@app.route("/api/admin/categories/<int:category_id>/header-style")
+@login_required
+def api_admin_category_header_style_get(category_id: int):
+    cat = db.session.get(Category, category_id)
+    if not cat or not has_restaurant_access(cat.restaurant):
+        return api_error("NOT_FOUND", "Категория не найдена", status=404)
+
+    effective, overrides = category_effective_header_style(cat.restaurant, cat)
+    return api_success({"header_style": effective, "overrides": overrides})
+
+
+@app.route("/api/admin/categories/<int:category_id>/header-style", methods=["PUT"])
+@login_required
+def api_admin_category_header_style_put(category_id: int):
+    cat = db.session.get(Category, category_id)
+    if not cat or not has_restaurant_access(cat.restaurant):
+        return api_error("NOT_FOUND", "Категория не найдена", status=404)
+
+    payload = request.get_json(silent=True)
+    if payload is None:
+        raw = (request.get_data() or b"").strip()
+        if raw == b"null":
+            cat.header_style_json = None
+            db.session.commit()
+            effective, overrides = category_effective_header_style(cat.restaurant, cat)
+            return api_success({"header_style": effective, "overrides": overrides})
+        return api_error("VALIDATION_ERROR", "Некорректный JSON", status=400)
+
+    if not isinstance(payload, dict):
+        return api_error("VALIDATION_ERROR", "Ожидается объект JSON или null", status=400)
+
+    safe, errors = sanitize_header_style(payload, strict=True)
+    if errors:
+        return api_error("VALIDATION_ERROR", "Некорректные значения", status=400, details=errors)
+
+    cat.header_style_json = safe or None
+    db.session.commit()
+    effective, overrides = category_effective_header_style(cat.restaurant, cat)
+    return api_success({"header_style": effective, "overrides": overrides})
 
 
 @app.route("/api/admin/categories/<int:category_id>", methods=["DELETE"])
@@ -2297,9 +4888,13 @@ def api_admin_dishes_create(restaurant_id: int):
     image_filename = None
     if image_file:
         try:
-            image_filename = save_image_upload(image_file, DISH_FOLDER, field_name="image")
+            image_filename = save_dish_image_upload(image_file, DISH_FOLDER, field_name="image")
         except ApiUploadError as e:
             return api_error(e.code, e.message, status=e.status, details=e.details)
+        # Generate responsive variants eagerly (fast, avoids layout shift on client).
+        image_variants = build_dish_image_variants(image_filename)
+    else:
+        image_variants = None
 
     try:
         price_value = float(price)
@@ -2316,9 +4911,21 @@ def api_admin_dishes_create(restaurant_id: int):
         is_spicy=api_parse_bool(form.get("is_spicy"), False),
         is_vegan=api_parse_bool(form.get("is_vegan"), False),
         image_filename=image_filename,
+        image_variants_json=image_variants or None,
+        processed_image_filename=None,
+        processed_image_variants_json=None,
+        image_remove_bg_status=None,
+        image_remove_bg_error=None,
+        use_processed_image=False,
     )
     db.session.add(dish)
     db.session.commit()
+    if image_filename and bool(getattr(restaurant, "menu_card_remove_bg_on_upload", False)):
+        try:
+            enqueue_dish_remove_bg_job(dish)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
     return api_success({"dish": api_dish_dict(dish)}, status=201)
 
 
@@ -2357,13 +4964,302 @@ def api_admin_dish_update(dish_id: int):
 
     image_file = request.files.get("image")
     if image_file:
+        old_image = dish.image_filename
+        old_variants = getattr(dish, "image_variants_json", None)
+        old_processed = getattr(dish, "processed_image_filename", None)
+        old_processed_variants = getattr(dish, "processed_image_variants_json", None)
         try:
-            dish.image_filename = save_image_upload(image_file, DISH_FOLDER, field_name="image")
+            dish.image_filename = save_dish_image_upload(image_file, DISH_FOLDER, field_name="image")
         except ApiUploadError as e:
             return api_error(e.code, e.message, status=e.status, details=e.details)
+        if old_image and old_image != dish.image_filename:
+            safe_delete_uploaded_file(old_image, required_top_dir="dishes")
+        if isinstance(old_variants, dict):
+            for p in old_variants.values():
+                if isinstance(p, str) and p:
+                    safe_delete_uploaded_file(p, required_top_dir="dishes")
+        if old_processed:
+            safe_delete_uploaded_file(old_processed, required_top_dir="dishes")
+        if isinstance(old_processed_variants, dict):
+            for p in old_processed_variants.values():
+                if isinstance(p, str) and p:
+                    safe_delete_uploaded_file(p, required_top_dir="dishes")
+
+        dish.image_variants_json = build_dish_image_variants(dish.image_filename) or None
+        dish.processed_image_filename = None
+        dish.processed_image_variants_json = None
+        dish.image_remove_bg_status = None
+        dish.image_remove_bg_error = None
+        dish.use_processed_image = False
 
     db.session.commit()
+    if image_file:
+        try:
+            restaurant = dish.category.restaurant
+        except Exception:
+            restaurant = None
+        if restaurant and bool(getattr(restaurant, "menu_card_remove_bg_on_upload", False)) and dish.image_filename:
+            try:
+                enqueue_dish_remove_bg_job(dish)
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
     return api_success({"dish": api_dish_dict(dish)})
+
+
+@app.route("/api/admin/dishes/<int:dish_id>/image")
+@login_required
+def api_admin_dish_image_get(dish_id: int):
+    dish = db.session.get(Dish, dish_id)
+    if not dish or not has_restaurant_access(dish.category.restaurant):
+        return api_error("NOT_FOUND", "Блюдо не найдено", status=404)
+
+    processed = getattr(dish, "processed_image_filename", None)
+    processed_url = url_for("uploaded_file", filename=processed) if processed else None
+    processed_srcset = None
+    if hasattr(dish, "processed_image_variants_json") and isinstance(getattr(dish, "processed_image_variants_json", None), dict):
+        parts = []
+        for k, v in sorted((dish.processed_image_variants_json or {}).items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 10**9):
+            try:
+                w = int(k)
+            except Exception:
+                continue
+            if isinstance(v, str) and v:
+                parts.append(f"{url_for('uploaded_file', filename=v)} {w}w")
+        processed_srcset = ", ".join(parts) if parts else None
+
+    return api_success(
+        {
+            "image_url": dish.image_url(),
+            "image_srcset": dish.image_srcset() if hasattr(dish, "image_srcset") else None,
+            "processed_image_url": processed_url,
+            "processed_image_srcset": processed_srcset,
+            "status": getattr(dish, "image_remove_bg_status", None),
+            "error": getattr(dish, "image_remove_bg_error", None),
+            "use_processed_image": bool(getattr(dish, "use_processed_image", False)),
+        }
+    )
+
+
+@app.route("/api/admin/dishes/<int:dish_id>/image/remove-bg", methods=["POST"])
+@login_required
+def api_admin_dish_image_remove_bg(dish_id: int):
+    dish = db.session.get(Dish, dish_id)
+    if not dish or not has_restaurant_access(dish.category.restaurant):
+        return api_error("NOT_FOUND", "Блюдо не найдено", status=404)
+    if not dish.image_filename:
+        return api_error("VALIDATION_ERROR", "У блюда нет изображения", status=400)
+
+    # Prevent piling up duplicate queued jobs.
+    existing = DishImageJob.query.filter(
+        DishImageJob.dish_id == dish.id,
+        DishImageJob.job_type == "remove_bg",
+        DishImageJob.status.in_(("queued", "processing")),
+    ).first()
+    if existing:
+        return api_success({"ok": True, "status": dish.image_remove_bg_status or existing.status})
+
+    enqueue_dish_remove_bg_job(dish)
+    db.session.commit()
+    return api_success({"ok": True, "status": dish.image_remove_bg_status})
+
+
+@app.route("/api/admin/dishes/<int:dish_id>/image/use-original", methods=["POST"])
+@login_required
+def api_admin_dish_image_use_original(dish_id: int):
+    dish = db.session.get(Dish, dish_id)
+    if not dish or not has_restaurant_access(dish.category.restaurant):
+        return api_error("NOT_FOUND", "Блюдо не найдено", status=404)
+    dish.use_processed_image = False
+    db.session.commit()
+    return api_success({"ok": True, "use_processed_image": False})
+
+
+@app.route("/api/admin/dishes/<int:dish_id>/image/use-processed", methods=["POST"])
+@login_required
+def api_admin_dish_image_use_processed(dish_id: int):
+    dish = db.session.get(Dish, dish_id)
+    if not dish or not has_restaurant_access(dish.category.restaurant):
+        return api_error("NOT_FOUND", "Блюдо не найдено", status=404)
+    if not getattr(dish, "processed_image_filename", None) or getattr(dish, "image_remove_bg_status", None) != "done":
+        return api_error("VALIDATION_ERROR", "Processed image not ready", status=400)
+    dish.use_processed_image = True
+    db.session.commit()
+    return api_success({"ok": True, "use_processed_image": True})
+
+
+def _is_unsafe_rich_text(value: str) -> bool:
+    lowered = (value or "").lower()
+    needles = ("<script", "javascript:", "onload=", "onerror=", "<iframe", "<object", "<embed")
+    return any(n in lowered for n in needles)
+
+
+@app.route("/api/admin/dishes/<int:dish_id>/translations")
+@login_required
+def api_admin_dish_translations_get(dish_id: int):
+    dish = db.session.get(Dish, dish_id)
+    if not dish or not has_restaurant_access(dish.category.restaurant):
+        return api_error("NOT_FOUND", "Блюдо не найдено", status=404)
+
+    raw_langs = (request.args.get("langs") or "").strip()
+    requested_langs = []
+    if raw_langs:
+        for part in raw_langs.split(","):
+            code = part.strip()
+            if code and code in LANGUAGES:
+                requested_langs.append(code)
+    if not requested_langs:
+        requested_langs = list(LANGUAGES.keys())
+
+    existing_rows = (
+        DishTranslation.query.filter(DishTranslation.dish_id == dish.id, DishTranslation.lang.in_(requested_langs))
+        .all()
+    )
+    row_by_lang = {r.lang: r for r in existing_rows}
+
+    updated = False
+    name_trans = dish.name_translations or {}
+    desc_trans = dish.description_translations or {}
+
+    def ensure_row(lang: str) -> DishTranslation:
+        nonlocal updated
+        row = row_by_lang.get(lang)
+        if row is None:
+            row = DishTranslation(dish_id=dish.id, lang=lang)
+            db.session.add(row)
+            row_by_lang[lang] = row
+            updated = True
+        return row
+
+    def ensure_auto(lang: str) -> tuple[str, str]:
+        nonlocal updated, name_trans, desc_trans
+        # DEFAULT_LANG uses canonical fields.
+        if lang == DEFAULT_LANG:
+            auto_title = dish.name or ""
+            auto_description = dish.description or ""
+            return auto_title, auto_description
+
+        auto_title = (name_trans.get(lang) or "").strip()
+        auto_description = (desc_trans.get(lang) or "").strip()
+
+        row = row_by_lang.get(lang)
+        if not auto_title and row and (row.auto_title or "").strip():
+            auto_title = row.auto_title.strip()
+            name_trans[lang] = auto_title
+            dish.name_translations = name_trans
+            updated = True
+        if not auto_description and row and (row.auto_description or "").strip():
+            auto_description = row.auto_description.strip()
+            desc_trans[lang] = auto_description
+            dish.description_translations = desc_trans
+            updated = True
+
+        if translator_type:
+            if not auto_title and dish.name:
+                translated = translate_text(dish.name, lang)
+                if translated:
+                    auto_title = translated.strip()
+                    name_trans[lang] = auto_title
+                    dish.name_translations = name_trans
+                    row = ensure_row(lang)
+                    row.auto_title = auto_title
+                    updated = True
+            if not auto_description and dish.description:
+                translated_desc = translate_text(dish.description, lang)
+                if translated_desc:
+                    auto_description = translated_desc.strip()
+                    desc_trans[lang] = auto_description
+                    dish.description_translations = desc_trans
+                    row = ensure_row(lang)
+                    row.auto_description = auto_description
+                    updated = True
+
+        # Keep DB row in sync with JSON auto translations if present.
+        if (auto_title or auto_description) and lang != DEFAULT_LANG:
+            row = ensure_row(lang)
+            if auto_title and (row.auto_title or "").strip() != auto_title:
+                row.auto_title = auto_title
+                updated = True
+            if (auto_description or "") and (row.auto_description or "").strip() != auto_description:
+                row.auto_description = auto_description
+                updated = True
+
+        return auto_title, auto_description
+
+    items = []
+    for lang in requested_langs:
+        row = row_by_lang.get(lang)
+        auto_title, auto_description = ensure_auto(lang)
+        manual_title = (row.manual_title if row else None)
+        manual_description = (row.manual_description if row else None)
+        items.append(
+            {
+                "lang": lang,
+                "auto": {"title": auto_title or "", "description": auto_description or ""},
+                "manual": {"title": manual_title, "description": manual_description},
+            }
+        )
+
+    if updated:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    return api_success({"items": items})
+
+
+@app.route("/api/admin/dishes/<int:dish_id>/translations/<lang>", methods=["PUT"])
+@login_required
+def api_admin_dish_translations_put(dish_id: int, lang: str):
+    dish = db.session.get(Dish, dish_id)
+    if not dish or not has_restaurant_access(dish.category.restaurant):
+        return api_error("NOT_FOUND", "Блюдо не найдено", status=404)
+
+    lang = (lang or "").strip()
+    if lang not in LANGUAGES:
+        return api_error("VALIDATION_ERROR", "Некорректный язык", status=400)
+
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return api_error("VALIDATION_ERROR", "Некорректный формат данных", status=400)
+
+    def normalize_manual(value) -> str | None:
+        if value is None:
+            return None
+        text_value = str(value).strip()
+        return text_value or None
+
+    manual_title = normalize_manual(data.get("manual_title")) if "manual_title" in data else None
+    manual_description = normalize_manual(data.get("manual_description")) if "manual_description" in data else None
+
+    for value in (manual_title, manual_description):
+        if value and _is_unsafe_rich_text(value):
+            return api_error("VALIDATION_ERROR", "Текст содержит недопустимые элементы", status=400)
+
+    row = DishTranslation.query.filter_by(dish_id=dish.id, lang=lang).first()
+    if not row:
+        row = DishTranslation(dish_id=dish.id, lang=lang)
+        db.session.add(row)
+
+    if "manual_title" in data:
+        row.manual_title = manual_title
+    if "manual_description" in data:
+        row.manual_description = manual_description
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return api_error("INTERNAL_ERROR", "Не удалось сохранить перевод", status=500)
+
+    return api_success(
+        {
+            "lang": lang,
+            "auto": {"title": row.auto_title or "", "description": row.auto_description or ""},
+            "manual": {"title": row.manual_title, "description": row.manual_description},
+        }
+    )
 
 
 @app.route("/api/admin/dishes/<int:dish_id>", methods=["DELETE"])
@@ -2372,8 +5268,11 @@ def api_admin_dish_delete(dish_id: int):
     dish = db.session.get(Dish, dish_id)
     if not dish or not has_restaurant_access(dish.category.restaurant):
         return api_error("NOT_FOUND", "Блюдо не найдено", status=404)
+    old_image = dish.image_filename
     db.session.delete(dish)
     db.session.commit()
+    if old_image:
+        safe_delete_uploaded_file(old_image, required_top_dir="dishes")
     return api_success({"ok": True})
 
 
@@ -2465,46 +5364,191 @@ def resolve_public_lang_arg() -> str:
 
 
 def public_restaurant_payload(restaurant: Restaurant, lang: str) -> dict:
+    # IMPORTANT: restaurant name is never auto-translated (brand identity).
+    updated = False
+    if lang != DEFAULT_LANG and translator_type:
+        desc_trans = restaurant.description_translations or {}
+        if not desc_trans.get(lang) and restaurant.description:
+            translated = translate_text(restaurant.description, lang)
+            if translated:
+                desc_trans[lang] = translated
+                restaurant.description_translations = desc_trans
+                updated = True
+
+        if updated:
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+
+    header_style = restaurant_effective_header_style(restaurant)
+    header_overrides, _ = sanitize_header_style(getattr(restaurant, "header_style_json", None), strict=False)
+    menu_card = restaurant_effective_menu_card(restaurant)
+
     return {
         "id": restaurant.id,
         "slug": restaurant.slug,
-        "name": restaurant.translated_name(lang),
+        "name": restaurant.name,
         "description": restaurant.translated_description(lang),
         "logo_url": restaurant.logo_url(),
-        "theme": restaurant.theme,
+        "phone": getattr(restaurant, "phone", None),
+        "whatsapp": getattr(restaurant, "whatsapp", None),
+        "instagram": getattr(restaurant, "instagram", None),
+        "facebook": getattr(restaurant, "facebook", None),
+        "theme": restaurant_effective_theme(restaurant),
+        "legacy_theme": restaurant.theme,
+        "header_style": header_style,
+        "header_style_overrides": header_overrides,
+        "hero": restaurant_effective_hero(restaurant),
+        "menu_card": {
+            "preset_key": menu_card.get("preset_key"),
+            "name": menu_card.get("name"),
+            "config": menu_card.get("config") or {},
+        },
         "menu_font": restaurant.menu_font,
+        "menu_font_size": getattr(restaurant, "menu_font_size", None),
+        "menu_font_brand": getattr(restaurant, "menu_font_brand", None),
+        "menu_font_brand_size": getattr(restaurant, "menu_font_brand_size", None),
+        "menu_font_category": getattr(restaurant, "menu_font_category", None),
+        "menu_font_category_size": getattr(restaurant, "menu_font_category_size", None),
+        "menu_font_item": getattr(restaurant, "menu_font_item", None),
+        "menu_font_item_size": getattr(restaurant, "menu_font_item_size", None),
+        "loading_image_path": getattr(restaurant, "loading_image_path", None),
+        "loading_image_url": restaurant.loading_image_url() if hasattr(restaurant, "loading_image_url") else None,
+        "loading_style": getattr(restaurant, "loading_style", None) or "spinner",
     }
 
 
 def public_categories_payload(restaurant: Restaurant, lang: str) -> list[dict]:
     categories = (
-        Category.query.options(joinedload(Category.dishes))
+        Category.query.options(selectinload(Category.dishes))
         .filter_by(restaurant_id=restaurant.id)
         .order_by(Category.sort_order, Category.name)
         .all()
     )
 
+    updated = False
+    dish_ids = []
+    for c in categories:
+        for d in (c.dishes or []):
+            if d and d.id:
+                dish_ids.append(d.id)
+    dish_ids = list(dict.fromkeys(dish_ids))
+    dish_translation_by_dish_id: dict[int, DishTranslation] = {}
+    if dish_ids:
+        rows = DishTranslation.query.filter(
+            DishTranslation.dish_id.in_(dish_ids),
+            DishTranslation.lang == lang,
+        ).all()
+        dish_translation_by_dish_id = {r.dish_id: r for r in rows}
+
+    def is_blank(value: str | None) -> bool:
+        return value is None or not str(value).strip()
+
+    def maybe_translate_attr(obj, attr: str, translations_attr: str, original: str | None) -> str:
+        nonlocal updated
+        if lang == DEFAULT_LANG:
+            return original or ""
+        translations = getattr(obj, translations_attr, None) or {}
+        current = translations.get(lang)
+        if current:
+            return current
+        if translator_type and original:
+            translated = translate_text(original, lang)
+            if translated:
+                translations[lang] = translated
+                setattr(obj, translations_attr, translations)
+                updated = True
+                return translated
+        return original or ""
+
     def pub_dish(d: Dish) -> dict:
+        row = dish_translation_by_dish_id.get(d.id)
+
+        auto_name = d.name or ""
+        auto_desc = d.description or ""
+        if lang != DEFAULT_LANG:
+            name_trans = d.name_translations or {}
+            desc_trans = d.description_translations or {}
+
+            auto_name = (name_trans.get(lang) or "").strip()
+            auto_desc = (desc_trans.get(lang) or "").strip()
+
+            if not auto_name and row and not is_blank(row.auto_title):
+                auto_name = (row.auto_title or "").strip()
+                name_trans[lang] = auto_name
+                d.name_translations = name_trans
+                updated = True
+            if not auto_desc and row and not is_blank(row.auto_description):
+                auto_desc = (row.auto_description or "").strip()
+                desc_trans[lang] = auto_desc
+                d.description_translations = desc_trans
+                updated = True
+
+            if translator_type:
+                if not auto_name and d.name:
+                    translated = translate_text(d.name, lang)
+                    if translated:
+                        auto_name = translated.strip()
+                        name_trans[lang] = auto_name
+                        d.name_translations = name_trans
+                        updated = True
+                        if row:
+                            if (row.auto_title or "").strip() != auto_name:
+                                row.auto_title = auto_name
+                                updated = True
+                if not auto_desc and d.description:
+                    translated_desc = translate_text(d.description, lang)
+                    if translated_desc:
+                        auto_desc = translated_desc.strip()
+                        desc_trans[lang] = auto_desc
+                        d.description_translations = desc_trans
+                        updated = True
+                        if row:
+                            if (row.auto_description or "").strip() != auto_desc:
+                                row.auto_description = auto_desc
+                                updated = True
+
+            if not auto_name:
+                auto_name = d.name or ""
+            if not auto_desc:
+                auto_desc = d.description or ""
+
+        name = row.manual_title if row and not is_blank(row.manual_title) else auto_name
+        desc = row.manual_description if row and not is_blank(row.manual_description) else auto_desc
         return {
             "id": d.id,
-            "name": d.translated_name(lang),
-            "description": d.translated_description(lang),
+            "name": name,
+            "description": desc,
             "price": float(d.price),
             "currency": d.currency,
             "available": bool(d.available),
             "is_spicy": bool(d.is_spicy),
             "is_vegan": bool(d.is_vegan),
             "image_url": d.image_url(),
+            "image_srcset": d.image_srcset() if hasattr(d, "image_srcset") else None,
             "category_id": d.category_id,
         }
 
     def pub_cat(c: Category) -> dict:
+        name = maybe_translate_attr(c, "name", "name_translations", c.name)
+        header_style, header_overrides = category_effective_header_style(restaurant, c)
         return {
             "id": c.id,
-            "name": c.translated_name(lang),
+            "name": name,
             "icon_name": c.icon_name,
+            "image_path": getattr(c, "image_path", None),
+            "image_url": c.image_url() if hasattr(c, "image_url") else None,
+            "header_style": header_style,
+            "header_style_overrides": header_overrides,
             "dishes": [pub_dish(d) for d in (c.dishes or [])],
         }
+
+    if updated:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     return [pub_cat(c) for c in categories]
 
@@ -2714,6 +5758,9 @@ def home():
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
+    spa = try_serve_react_index()
+    if spa is not None and request.method == "GET":
+        return spa
     if current_user.is_authenticated:
         return redirect(url_for("dashboard"))
     form = RegistrationForm()
@@ -3550,6 +6597,19 @@ def serve_react_index_or_404():
 
 
 with app.app_context():
+    # Backward compat: if an old "theme" table exists, rename it to "themes".
+    try:
+        inspector_pre = inspect(db.engine)
+        if inspector_pre.has_table("theme") and not inspector_pre.has_table("themes"):
+            with db.engine.begin() as conn:
+                dialect = db.engine.dialect.name
+                if dialect == "mysql":
+                    conn.execute(text("RENAME TABLE theme TO themes"))
+                else:
+                    conn.execute(text("ALTER TABLE theme RENAME TO themes"))
+    except Exception:
+        pass
+
     db.create_all()
     # Ensure new optional columns exist for theme and menu font (safe for SQLite/MySQL)
     inspector = inspect(db.engine)
@@ -3562,7 +6622,142 @@ with app.app_context():
                 pass
         if "menu_font" not in columns:
             try:
-                conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_font VARCHAR(32)"))
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_font VARCHAR(255)"))
+            except Exception:
+                pass
+        else:
+            # If previously created as VARCHAR(32), widen to store uploaded font paths.
+            try:
+                dialect = db.engine.dialect.name
+                if dialect == "mysql":
+                    conn.execute(text("ALTER TABLE restaurant MODIFY COLUMN menu_font VARCHAR(255)"))
+                elif dialect == "postgresql":
+                    conn.execute(text("ALTER TABLE restaurant ALTER COLUMN menu_font TYPE VARCHAR(255)"))
+            except Exception:
+                pass
+        if "phone" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN phone VARCHAR(40)"))
+            except Exception:
+                pass
+        if "whatsapp" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN whatsapp VARCHAR(40)"))
+            except Exception:
+                pass
+        if "instagram" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN instagram VARCHAR(255)"))
+            except Exception:
+                pass
+        if "facebook" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN facebook VARCHAR(255)"))
+            except Exception:
+                pass
+        if "menu_font_size" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_font_size INTEGER"))
+            except Exception:
+                pass
+        if "menu_font_brand" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_font_brand VARCHAR(255)"))
+            except Exception:
+                pass
+        if "menu_font_brand_size" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_font_brand_size INTEGER"))
+            except Exception:
+                pass
+        if "menu_font_category" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_font_category VARCHAR(255)"))
+            except Exception:
+                pass
+        if "menu_font_category_size" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_font_category_size INTEGER"))
+            except Exception:
+                pass
+        if "menu_font_item" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_font_item VARCHAR(255)"))
+            except Exception:
+                pass
+        if "menu_font_item_size" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_font_item_size INTEGER"))
+            except Exception:
+                pass
+        if "loading_image_path" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN loading_image_path VARCHAR(255)"))
+            except Exception:
+                pass
+        if "loading_style" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN loading_style VARCHAR(32)"))
+            except Exception:
+                pass
+        if "theme_id" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN theme_id INTEGER"))
+            except Exception:
+                pass
+        if "theme_overrides_json" not in columns:
+            try:
+                dialect = db.engine.dialect.name
+                if dialect == "mysql":
+                    conn.execute(text("ALTER TABLE restaurant ADD COLUMN theme_overrides_json JSON"))
+                else:
+                    conn.execute(text("ALTER TABLE restaurant ADD COLUMN theme_overrides_json TEXT"))
+            except Exception:
+                pass
+        if "header_style_json" not in columns:
+            try:
+                dialect = db.engine.dialect.name
+                if dialect == "mysql":
+                    conn.execute(text("ALTER TABLE restaurant ADD COLUMN header_style_json JSON"))
+                else:
+                    conn.execute(text("ALTER TABLE restaurant ADD COLUMN header_style_json TEXT"))
+            except Exception:
+                pass
+        if "hero_preset_id" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN hero_preset_id INTEGER"))
+            except Exception:
+                pass
+        if "hero_overrides_json" not in columns:
+            try:
+                dialect = db.engine.dialect.name
+                if dialect == "mysql":
+                    conn.execute(text("ALTER TABLE restaurant ADD COLUMN hero_overrides_json JSON"))
+                else:
+                    conn.execute(text("ALTER TABLE restaurant ADD COLUMN hero_overrides_json TEXT"))
+            except Exception:
+                pass
+        if "menu_card_preset_id" not in columns:
+            try:
+                conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_card_preset_id INTEGER"))
+            except Exception:
+                pass
+        if "menu_card_overrides_json" not in columns:
+            try:
+                dialect = db.engine.dialect.name
+                if dialect == "mysql":
+                    conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_card_overrides_json JSON"))
+                else:
+                    conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_card_overrides_json TEXT"))
+            except Exception:
+                pass
+        if "menu_card_remove_bg_on_upload" not in columns:
+            try:
+                dialect = db.engine.dialect.name
+                if dialect == "mysql":
+                    conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_card_remove_bg_on_upload BOOLEAN"))
+                else:
+                    conn.execute(text("ALTER TABLE restaurant ADD COLUMN menu_card_remove_bg_on_upload INTEGER"))
             except Exception:
                 pass
     category_columns = {col["name"] for col in inspector.get_columns("category")} if inspector.has_table("category") else set()
@@ -3572,6 +6767,142 @@ with app.app_context():
                 conn.execute(text("ALTER TABLE category ADD COLUMN icon_name VARCHAR(64)"))
         except Exception:
             pass
+    if "image_path" not in category_columns and inspector.has_table("category"):
+        try:
+            with db.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE category ADD COLUMN image_path VARCHAR(255)"))
+        except Exception:
+            pass
+    if "header_style_json" not in category_columns and inspector.has_table("category"):
+        try:
+            with db.engine.begin() as conn:
+                dialect = db.engine.dialect.name
+                if dialect == "mysql":
+                    conn.execute(text("ALTER TABLE category ADD COLUMN header_style_json JSON"))
+                else:
+                    conn.execute(text("ALTER TABLE category ADD COLUMN header_style_json TEXT"))
+        except Exception:
+            pass
+
+    dish_columns = {col["name"] for col in inspector.get_columns("dish")} if inspector.has_table("dish") else set()
+    if inspector.has_table("dish"):
+        try:
+            with db.engine.begin() as conn:
+                if "image_variants_json" not in dish_columns:
+                    dialect = db.engine.dialect.name
+                    if dialect == "mysql":
+                        conn.execute(text("ALTER TABLE dish ADD COLUMN image_variants_json JSON"))
+                    else:
+                        conn.execute(text("ALTER TABLE dish ADD COLUMN image_variants_json TEXT"))
+                if "processed_image_filename" not in dish_columns:
+                    conn.execute(text("ALTER TABLE dish ADD COLUMN processed_image_filename VARCHAR(255)"))
+                if "processed_image_variants_json" not in dish_columns:
+                    dialect = db.engine.dialect.name
+                    if dialect == "mysql":
+                        conn.execute(text("ALTER TABLE dish ADD COLUMN processed_image_variants_json JSON"))
+                    else:
+                        conn.execute(text("ALTER TABLE dish ADD COLUMN processed_image_variants_json TEXT"))
+                if "image_remove_bg_status" not in dish_columns:
+                    conn.execute(text("ALTER TABLE dish ADD COLUMN image_remove_bg_status VARCHAR(32)"))
+                if "image_remove_bg_error" not in dish_columns:
+                    conn.execute(text("ALTER TABLE dish ADD COLUMN image_remove_bg_error VARCHAR(255)"))
+                if "use_processed_image" not in dish_columns:
+                    dialect = db.engine.dialect.name
+                    if dialect == "mysql":
+                        conn.execute(text("ALTER TABLE dish ADD COLUMN use_processed_image BOOLEAN"))
+                    else:
+                        conn.execute(text("ALTER TABLE dish ADD COLUMN use_processed_image INTEGER"))
+        except Exception:
+            pass
+
+    # Seed built-in themes and assign default theme_id where missing.
+    try:
+        for preset_key, preset in THEME_PRESETS.items():
+            existing = Theme.query.filter_by(preset_key=preset_key).first()
+            if existing:
+                continue
+            theme = Theme(
+                name=preset.get("name") or preset_key,
+                preset_key=preset_key,
+                config_json={
+                    "vars": preset.get("vars") or {},
+                    "category_layout": preset.get("category_layout") or "pills",
+                    "transition": preset.get("transition") or "slide",
+                    "card_style": preset.get("card_style") or "glass",
+                },
+            )
+            db.session.add(theme)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    try:
+        default_theme = Theme.query.filter_by(preset_key=DEFAULT_THEME_PRESET).first()
+        if default_theme:
+            # Only set theme_id if it's NULL (keep compatibility with existing restaurants).
+            Restaurant.query.filter(or_(Restaurant.theme_id.is_(None), Restaurant.theme_id == 0)).update(
+                {"theme_id": default_theme.id},
+                synchronize_session=False,
+            )
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    # Seed built-in hero presets and assign default hero_preset_id where missing.
+    try:
+        for preset_key, preset in HERO_PRESETS.items():
+            existing = HeroPreset.query.filter_by(key=preset_key).first()
+            if existing:
+                continue
+            row = HeroPreset(
+                name=preset.get("name") or preset_key,
+                key=preset_key,
+                is_builtin=True,
+                config_json=preset.get("config_json") or {},
+            )
+            db.session.add(row)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    try:
+        default_hero = HeroPreset.query.filter_by(key=DEFAULT_HERO_PRESET_KEY).first()
+        if default_hero:
+            Restaurant.query.filter(or_(Restaurant.hero_preset_id.is_(None), Restaurant.hero_preset_id == 0)).update(
+                {"hero_preset_id": default_hero.id},
+                synchronize_session=False,
+            )
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    # Seed built-in menu card presets and assign default menu_card_preset_id where missing.
+    try:
+        for preset_key, preset in MENU_CARD_PRESETS.items():
+            existing = MenuCardPreset.query.filter_by(key=preset_key).first()
+            if existing:
+                continue
+            row = MenuCardPreset(
+                name=preset.get("name") or preset_key,
+                key=preset_key,
+                is_builtin=True,
+                config_json=sanitize_menu_card_config(preset.get("config_json") or {}, strict=False)[0],
+            )
+            db.session.add(row)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    try:
+        default_card = MenuCardPreset.query.filter_by(key=DEFAULT_MENU_CARD_PRESET_KEY).first()
+        if default_card:
+            Restaurant.query.filter(or_(Restaurant.menu_card_preset_id.is_(None), Restaurant.menu_card_preset_id == 0)).update(
+                {"menu_card_preset_id": default_card.id},
+                synchronize_session=False,
+            )
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
 
 
 def build_ssl_context() -> tuple[str, str] | None:

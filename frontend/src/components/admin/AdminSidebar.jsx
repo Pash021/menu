@@ -6,6 +6,7 @@ import {
   Layers,
   UtensilsCrossed,
   Table2,
+  Palette,
   Users,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -35,6 +36,7 @@ export function AdminSidebar({ onNavigate }) {
     { to: "/admin/categories", label: t("nav.categories"), icon: Layers },
     { to: "/admin/dishes", label: t("nav.dishes"), icon: UtensilsCrossed },
     { to: "/admin/tables", label: t("nav.tables"), icon: Table2 },
+    { to: "/admin/themes", label: t("nav.themes"), icon: Palette },
     { to: "/admin/users", label: t("nav.users"), icon: Users },
   ];
 

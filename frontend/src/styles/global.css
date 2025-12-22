@@ -66,6 +66,25 @@
 }
 
 @layer utilities {
+  html[data-menu-swipe="1"] .menuGlassSurface,
+  html[data-menu-anim="1"] .menuGlassSurface {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+
+  html[data-menu-swipe="1"] .menuPageTransition,
+  html[data-menu-anim="1"] .menuPageTransition {
+    box-shadow: none !important;
+  }
+
+  html[data-menu-swipe="1"] .menuFloatingAction,
+  html[data-menu-anim="1"] .menuFloatingAction {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+
   .paper-bg {
     background-image:
       radial-gradient(1200px 600px at 15% -10%, hsl(var(--primary) / 0.14), transparent 60%),

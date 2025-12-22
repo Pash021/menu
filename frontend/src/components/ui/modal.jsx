@@ -21,7 +21,7 @@ const DialogOverlay = React.forwardRef(({ className, ...props }, ref) => (
 ));
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
-const DialogContent = React.forwardRef(({ className, children, variant = "center", ...props }, ref) => (
+const DialogContent = React.forwardRef(({ className, children, variant = "center", showCloseButton = true, closeButtonClassName, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
@@ -35,16 +35,18 @@ const DialogContent = React.forwardRef(({ className, children, variant = "center
       {...props}
     >
       {children}
-      <DialogClose asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="absolute right-3 top-3 h-9 w-9 rounded-full"
-        >
-          <X className="h-4 w-4" />
-        </Button>
-      </DialogClose>
+      {showCloseButton ? (
+        <DialogClose asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={cn("absolute right-3 top-3 h-9 w-9 rounded-full", closeButtonClassName)}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </DialogClose>
+      ) : null}
     </DialogPrimitive.Content>
   </DialogPortal>
 ));
@@ -75,6 +77,7 @@ DialogDescription.displayName = DialogPrimitive.Description.displayName;
 export {
   Dialog,
   DialogTrigger,
+  DialogClose,
   DialogContent,
   DialogHeader,
   DialogFooter,

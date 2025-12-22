@@ -1,101 +1,253 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Navigate, Route, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowUp, ChevronDown, Minus, Plus, Search, ShoppingCart, Sparkles, Trash2, UtensilsCrossed } from "lucide-react";
-import { AnimatePresence, motion } from "framer-motion";
+import { Minus, Plus, ShoppingCart, Trash2, UtensilsCrossed, X } from "lucide-react";
 import { toast } from "sonner";
+import { AnimatePresence } from "framer-motion";
 import { callWaiter, getPublicMenu, getPublicRestaurant } from "@/api/menu";
 import { useI18n } from "@/lib/i18n";
 import { formatMoney } from "@/lib/format";
-import { CategoryIcon } from "@/lib/categoryIcons";
-import { ThemeToggle } from "@/components/ThemeToggle";
-import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { EmptyState } from "@/components/EmptyState";
-import { LoadingSkeleton } from "@/components/LoadingSkeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/modal";
-import { DishCard } from "@/components/menu/DishCard";
-import { DishDetailsModal } from "@/components/menu/DishDetailsModal";
-import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/modal";
+import { DishDetailsRouteModal } from "@/components/menu/DishDetailsRouteModal";
+import PublicMenuAnimatedRoutes from "@/routes/PublicMenuAnimatedRoutes";
+import { PageCurlWrapper } from "@/components/transitions/PageCurlWrapper";
+import { useTransitionDirection } from "@/hooks/useTransitionDirection";
+import { useRestaurantFont } from "@/hooks/useRestaurantFont";
+import { ThemeProvider } from "@/components/theme/ThemeProvider";
+import { MenuCardProvider } from "@/components/menuCard/MenuCardProvider";
 
-const gridVariants = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.045, delayChildren: 0.02 } },
-};
+import PublicMenuHome from "./menu/PublicMenuHome";
+import CategoryPage from "./menu/CategoryPage";
+import MealsPage from "./menu/MealsPage";
+import ContactPage from "./menu/ContactPage";
+import { PublicMenuLoader } from "./menu/PublicMenuLoader";
+import { FloatingActionButton } from "./menu/components/FloatingActionButton";
+import { MenuHeaderActions } from "./menu/components/MenuHeaderActions";
+import {
+  findMealsCategory,
+  getPublicMenuBasePath,
+  sortCategoriesForHome,
+} from "./menu/publicMenuUtils";
 
-const cardVariants = {
-  hidden: { opacity: 0, y: 10 },
-  show: {
-    opacity: 1,
-    y: 0,
-    transition: { type: "spring", stiffness: 420, damping: 32, mass: 0.8 },
-  },
-};
+import shellStyles from "./menu/PublicMenuShell.module.css";
+import styles from "./menu/PublicMenuPage.module.css";
 
-function MenuSkeleton() {
+const CartItemRow = React.memo(function CartItemRow({ item, onIncrease, onDecrease, onRemove, isAnimating = false }) {
+  const qty = Number(item?.qty || 0);
+  const canDecrease = qty > 1;
+
   return (
-    <div className="container py-8">
-      <div className="mx-auto max-w-md text-center">
-        <LoadingSkeleton className="mx-auto h-24 w-24 rounded-3xl" />
-        <LoadingSkeleton className="mx-auto mt-4 h-8 w-56" />
-        <LoadingSkeleton className="mx-auto mt-2 h-4 w-72" />
+    <div className="flex items-center justify-between gap-2 rounded-2xl border bg-card/70 p-2">
+      <div className="min-w-0 flex-1">
+        <div className={styles.cartItemName}>{item.name}</div>
+        <div className="mt-1 text-xs text-muted-foreground">{formatMoney(item.price, item.currency)}</div>
       </div>
 
-      <div className="mt-6 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
-        <LoadingSkeleton className="h-11 w-full rounded-2xl" />
-        <LoadingSkeleton className="h-11 w-full rounded-2xl sm:w-40" />
-      </div>
-
-      <div className="mt-4 flex gap-2 overflow-hidden">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <LoadingSkeleton key={i} className="h-9 w-28 rounded-full" />
-        ))}
-      </div>
-
-      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {Array.from({ length: 9 }).map((_, i) => (
-          <div key={i} className="rounded-2xl border bg-card/80 p-3 shadow-sm backdrop-blur">
-            <div className="flex gap-3">
-              <LoadingSkeleton className="h-16 w-16 rounded-xl" />
-              <div className="flex-1 space-y-2">
-                <LoadingSkeleton className="h-4 w-2/3" />
-                <LoadingSkeleton className="h-3 w-full" />
-                <LoadingSkeleton className="h-3 w-1/2" />
-              </div>
-            </div>
-          </div>
-        ))}
+      <div className="flex shrink-0 items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-11 w-11 rounded-full"
+          onClick={() => (canDecrease ? onDecrease(item.id) : onRemove(item.id))}
+          aria-label={canDecrease ? "Decrease" : "Remove"}
+          disabled={isAnimating}
+        >
+          {canDecrease ? <Minus className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
+        </Button>
+        <span className="w-7 text-center text-sm font-semibold tabular-nums">{qty}</span>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-11 w-11 rounded-full"
+          onClick={() => onIncrease(item.id)}
+          aria-label="Increase"
+          disabled={isAnimating}
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
       </div>
     </div>
+  );
+});
+
+function readPublicStyleCache(slug) {
+  if (!slug) return null;
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(`qrmenu_public_style:${slug}`);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || data.v !== 1) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+const PublicMenuCategoryRoute = React.memo(function PublicMenuCategoryRoute({
+  restaurant,
+  slug,
+  tableId,
+  menuCategories,
+  navCategories,
+  mealsAvailable,
+  mealsCategoryId,
+  basePath,
+  rightSlot,
+  activeDishId,
+  transitionMode,
+}) {
+  const { categoryId } = useParams();
+  const navigate = useNavigate();
+  const pageLocation = useLocation();
+  const { prepareTransition } = useTransitionDirection();
+
+  const id = Number(categoryId);
+  const category = menuCategories.find((c) => c.id === id) || null;
+  const dishes = category?.dishes || [];
+
+  const ids = navCategories.map((c) => c.id);
+  const idx = ids.indexOf(id);
+  const nextId = idx !== -1 ? ids[idx + 1] : null;
+
+  const goBack = useCallback(() => {
+    if (window.history.length > 1) navigate(-1);
+    else navigate(basePath);
+  }, [basePath, navigate]);
+
+  const openDish = useCallback(
+    (dish) => {
+      const dishId = Number(dish?.id);
+      if (!Number.isFinite(dishId)) return;
+      if (!prepareTransition("forward")) return;
+      navigate(`${basePath}/dish/${dishId}`, { state: { backgroundLocation: pageLocation } });
+    },
+    [basePath, navigate, pageLocation, prepareTransition]
+  );
+
+  const goNextCategory = useCallback(() => {
+    if (!nextId) return;
+    navigate(`${basePath}/c/${nextId}`);
+  }, [basePath, navigate, nextId]);
+
+  const goMeals = useCallback(() => {
+    navigate(`${basePath}/meals`);
+  }, [basePath, navigate]);
+
+  if (mealsAvailable && mealsCategoryId && mealsCategoryId === id) return <Navigate to={`${basePath}/meals`} replace />;
+  if (!category) return <Navigate to={basePath} replace />;
+
+  return (
+    <PageCurlWrapper
+      mode={transitionMode}
+      enableGestures
+      enableArrowKeys
+      onSwipeRight={goBack}
+      onSwipeLeft={nextId ? goNextCategory : mealsAvailable ? goMeals : undefined}
+    >
+      <CategoryPage
+        restaurant={restaurant}
+        slug={slug}
+        tableId={tableId}
+        category={category}
+        dishes={dishes}
+        backTo={basePath}
+        onOpenDish={openDish}
+        rightSlot={rightSlot}
+        activeDishId={activeDishId}
+      />
+    </PageCurlWrapper>
+  );
+});
+
+const PublicMenuMealsRoute = React.memo(function PublicMenuMealsRoute({
+  restaurant,
+  slug,
+  mealsCategory,
+  basePath,
+  rightSlot,
+  activeDishId,
+  transitionMode,
+}) {
+  const navigate = useNavigate();
+  const pageLocation = useLocation();
+  const { prepareTransition } = useTransitionDirection();
+
+  const goBack = useCallback(() => {
+    if (window.history.length > 1) navigate(-1);
+    else navigate(basePath);
+  }, [basePath, navigate]);
+
+  const goContact = useCallback(() => navigate(`${basePath}/contact`), [basePath, navigate]);
+
+  const openDish = useCallback(
+    (dish) => {
+      const dishId = Number(dish?.id);
+      if (!Number.isFinite(dishId)) return;
+      if (!prepareTransition("forward")) return;
+      navigate(`${basePath}/dish/${dishId}`, { state: { backgroundLocation: pageLocation } });
+    },
+    [basePath, navigate, pageLocation, prepareTransition]
+  );
+
+  return (
+    <PageCurlWrapper mode={transitionMode} enableGestures enableArrowKeys onSwipeRight={goBack} onSwipeLeft={goContact}>
+      <MealsPage
+        restaurant={restaurant}
+        slug={slug}
+        mealsCategory={mealsCategory}
+        dishes={mealsCategory?.dishes || []}
+        backTo={basePath}
+        onOpenDish={openDish}
+        rightSlot={rightSlot}
+        activeDishId={activeDishId}
+      />
+    </PageCurlWrapper>
+  );
+});
+
+function PublicMenuDishModalRoute({ dishById, cartQtyById, onIncrease, onDecrease, basePath }) {
+  const { dishId } = useParams();
+  const navigate = useNavigate();
+  const { prepareTransition } = useTransitionDirection();
+
+  const id = Number(dishId);
+  const dish = Number.isFinite(id) ? dishById.get(id) || null : null;
+
+  const close = useCallback(() => {
+    if (!prepareTransition("back")) return;
+    if (window.history.length > 1) navigate(-1);
+    else navigate(basePath);
+  }, [basePath, navigate, prepareTransition]);
+
+  useEffect(() => {
+    if (dish) return;
+    if (window.history.length > 1) navigate(-1);
+    else navigate(basePath, { replace: true });
+  }, [basePath, dish, navigate]);
+
+  return (
+    <DishDetailsRouteModal
+      dish={dish}
+      quantity={dish ? cartQtyById.get(dish.id) || 0 : 0}
+      onIncrease={onIncrease}
+      onDecrease={onDecrease}
+      onClose={close}
+    />
   );
 }
 
 export default function PublicMenuPage() {
   const { slug, tableId } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const { lang, t } = useI18n();
-
-  const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search, 250);
-  const [activeCategoryId, setActiveCategoryId] = useState(null);
-  const [expandedCategoryId, setExpandedCategoryId] = useState(null);
-  const [selectedDish, setSelectedDish] = useState(null);
-  const [dishDetailsOpen, setDishDetailsOpen] = useState(false);
-  const [showToTop, setShowToTop] = useState(false);
-  const [compactHeader, setCompactHeader] = useState(false);
-
-  const [waiterOpen, setWaiterOpen] = useState(false);
-  const [waiterNote, setWaiterNote] = useState("");
-  const [waiterReasons, setWaiterReasons] = useState({
-    water: false,
-    bill: false,
-    help: false,
-  });
-
-  const sectionRefs = useRef({});
-  const heroSentinelRef = useRef(null);
-  const heroChipsRef = useRef(null);
-  const stickyChipsRef = useRef(null);
+  const cachedStyle = useMemo(() => readPublicStyleCache(slug), [slug]);
 
   const cartKey = useMemo(() => {
     if (!slug) return null;
@@ -147,8 +299,30 @@ export default function PublicMenuPage() {
   }, [cartKey]);
 
   useEffect(() => {
-    writeCart(cartKey, cartItems);
+    if (!cartKey) return;
+    const id =
+      typeof window.requestIdleCallback === "function"
+        ? window.requestIdleCallback(() => writeCart(cartKey, cartItems), { timeout: 1500 })
+        : window.setTimeout(() => writeCart(cartKey, cartItems), 600);
+
+    return () => {
+      if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(id);
+      else window.clearTimeout(id);
+    };
   }, [cartKey, cartItems]);
+
+  useEffect(() => {
+    if (!cartOpen) return undefined;
+    if (typeof document === "undefined") return undefined;
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+    const prevBodyOverflow = document.body.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.documentElement.style.overflow = prevHtmlOverflow;
+      document.body.style.overflow = prevBodyOverflow;
+    };
+  }, [cartOpen]);
 
   const cartQtyById = useMemo(() => {
     const map = new Map();
@@ -212,56 +386,32 @@ export default function PublicMenuPage() {
     setCartItems([]);
   }
 
-  useEffect(() => {
-    function onScroll() {
-      setShowToTop(window.scrollY > 700);
-    }
-    window.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => window.removeEventListener("scroll", onScroll);
+  const increaseCartItem = useCallback((id) => {
+    const parsed = Number(id);
+    if (!Number.isFinite(parsed)) return;
+    setCartItems((prev) => prev.map((x) => (x.id === parsed ? { ...x, qty: x.qty + 1 } : x)));
   }, []);
 
-  useEffect(() => {
-    if (dishDetailsOpen) return;
-    if (!selectedDish) return;
-    const t = window.setTimeout(() => setSelectedDish(null), 200);
-    return () => window.clearTimeout(t);
-  }, [dishDetailsOpen, selectedDish]);
+  const decreaseCartItem = useCallback((id) => decreaseCart(id), []);
+  const removeCartItem = useCallback((id) => removeFromCart(id), []);
+  const clearCartStable = useCallback(() => clearCart(), []);
 
-  useEffect(() => {
-    const el = heroSentinelRef.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(
-      ([entry]) => setCompactHeader(!entry.isIntersecting),
-      { threshold: 0 }
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (!activeCategoryId) return;
-    const id = String(activeCategoryId);
-
-    function scrollChip(container) {
-      const btn = container?.querySelector?.(`[data-cat-id="${id}"]`);
-      if (btn && typeof btn.scrollIntoView === "function") {
-        btn.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-      }
-    }
-
-    // Important: only scroll the chip row that is currently visible.
-    // Otherwise `scrollIntoView` can scroll the whole page vertically.
-    if (compactHeader) scrollChip(stickyChipsRef.current);
-    else scrollChip(heroChipsRef.current);
-  }, [activeCategoryId, compactHeader]);
+  const [waiterOpen, setWaiterOpen] = useState(false);
+  const [waiterNote, setWaiterNote] = useState("");
+  const [waiterReasons, setWaiterReasons] = useState({
+    water: false,
+    bill: false,
+    help: false,
+  });
 
   const restaurantQuery = useQuery({
     queryKey: ["publicRestaurant", slug, lang],
     queryFn: () => getPublicRestaurant(slug, { lang }),
     enabled: Boolean(slug),
-    staleTime: 60_000,
+    staleTime: 0,
     gcTime: 10 * 60_000,
+    refetchOnMount: "always",
+    refetchOnReconnect: true,
     retry: false,
   });
 
@@ -285,53 +435,145 @@ export default function PublicMenuPage() {
   });
 
   const restaurant = restaurantQuery.data?.restaurant ?? null;
+  const publicTheme = restaurant?.theme || null;
+  const routeTransitionMode = useMemo(() => {
+    const t = publicTheme?.transition;
+    if (t === "slide") return "slide";
+    if (t === "fade") return "fade";
+    if (t === "pageFlip") return "flip";
+    if (t === "pageCurlLite") return "flip";
+    return "fade";
+  }, [publicTheme?.transition]);
+  const homeGesturesEnabled = publicTheme?.category_layout !== "carousel";
+  const baseFont = useRestaurantFont(restaurant, restaurant?.menu_font, "base");
+  const brandFont = useRestaurantFont(restaurant, restaurant?.menu_font_brand || restaurant?.menu_font, "brand");
+  const categoryFont = useRestaurantFont(restaurant, restaurant?.menu_font_category || restaurant?.menu_font, "category");
+  const itemFont = useRestaurantFont(restaurant, restaurant?.menu_font_item || restaurant?.menu_font, "item");
   const categories = menuQuery.data?.categories ?? [];
+  const restaurantFontSize = useMemo(() => {
+    const raw = Number(restaurant?.menu_font_size);
+    if (!Number.isFinite(raw)) return null;
+    if (raw < 12) return 12;
+    if (raw > 26) return 26;
+    return Math.round(raw);
+  }, [restaurant?.menu_font_size]);
+
+  const brandFontSize = useMemo(() => {
+    const raw = Number(restaurant?.menu_font_brand_size);
+    if (!Number.isFinite(raw)) return null;
+    return Math.max(20, Math.min(60, Math.round(raw)));
+  }, [restaurant?.menu_font_brand_size]);
+
+  const categoryFontSize = useMemo(() => {
+    const raw = Number(restaurant?.menu_font_category_size);
+    if (!Number.isFinite(raw)) return null;
+    return Math.max(10, Math.min(40, Math.round(raw)));
+  }, [restaurant?.menu_font_category_size]);
+
+  const itemFontSize = useMemo(() => {
+    const raw = Number(restaurant?.menu_font_item_size);
+    if (!Number.isFinite(raw)) return null;
+    return Math.max(10, Math.min(28, Math.round(raw)));
+  }, [restaurant?.menu_font_item_size]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    if (!restaurantFontSize) return undefined;
+    const prev = document.documentElement.style.fontSize;
+    document.documentElement.style.fontSize = `${restaurantFontSize}px`;
+    return () => {
+      document.documentElement.style.fontSize = prev;
+    };
+  }, [restaurantFontSize]);
+
+  useEffect(() => {
+    if (!slug) return;
+    if (typeof window === "undefined") return;
+    if (!restaurant?.id) return;
+    try {
+      const key = `qrmenu_public_style:${slug}`;
+      const payload = {
+        v: 1,
+        restaurantId: restaurant.id,
+        fontSize: restaurantFontSize || null,
+        loaderImageUrl: restaurant?.loading_image_url || null,
+        loaderStyle: restaurant?.loading_style || "spinner",
+        vars: {
+          "--menu-font-body": baseFont.fontFamily,
+          "--menu-font-brand": brandFont.fontFamily,
+          "--menu-font-category": categoryFont.fontFamily,
+          "--menu-font-item": itemFont.fontFamily,
+          "--menu-font-brand-size": brandFontSize ? `${brandFontSize}px` : null,
+          "--menu-font-category-size": categoryFontSize ? `${categoryFontSize}px` : null,
+          "--menu-font-item-size": itemFontSize ? `${itemFontSize}px` : null,
+        },
+        faces: [baseFont, brandFont, categoryFont, itemFont]
+          .filter((f) => f?.type === "uploaded" && f?.cssFamily && f?.url)
+          .map((f) => ({ family: f.cssFamily, url: f.url })),
+      };
+      window.localStorage.setItem(key, JSON.stringify(payload));
+    } catch {
+      // ignore
+    }
+  }, [
+    baseFont,
+    brandFont,
+    brandFontSize,
+    categoryFont,
+    categoryFontSize,
+    itemFont,
+    itemFontSize,
+    restaurant?.id,
+    restaurant?.loading_image_url,
+    restaurant?.loading_style,
+    restaurantFontSize,
+    slug,
+  ]);
   const hasTable = Boolean(tableId);
   const menuCategories = useMemo(() => categories.filter((c) => (c?.dishes || []).length > 0), [categories]);
-
-  useEffect(() => {
-    if (!menuCategories.length) return;
-    setActiveCategoryId((prev) => prev ?? menuCategories[0].id);
+  const mealsCategory = useMemo(() => findMealsCategory(menuCategories), [menuCategories]);
+  const mealsAvailable = Boolean((mealsCategory?.dishes || []).length > 0);
+  const basePath = useMemo(() => getPublicMenuBasePath({ slug, tableId }), [slug, tableId]);
+  const navCategories = useMemo(() => {
+    const items = mealsAvailable && mealsCategory ? menuCategories.filter((c) => c.id !== mealsCategory.id) : menuCategories;
+    return sortCategoriesForHome(items);
+  }, [mealsAvailable, mealsCategory, menuCategories]);
+  const activeDishId = useMemo(() => {
+    if (!location.state?.backgroundLocation) return null;
+    const match = String(location.pathname || "").match(/(?:^|\/)dish\/(\d+)(?:\/|$)/);
+    if (!match) return null;
+    const id = Number(match[1]);
+    return Number.isFinite(id) ? id : null;
+  }, [location.pathname, location.state]);
+  const dishById = useMemo(() => {
+    const map = new Map();
+    for (const category of menuCategories) {
+      for (const dish of category?.dishes || []) {
+        const id = Number(dish?.id);
+        if (!Number.isFinite(id)) continue;
+        map.set(id, dish);
+      }
+    }
+    return map;
   }, [menuCategories]);
 
-  const filteredCategories = useMemo(() => {
-    const q = debouncedSearch.trim().toLowerCase();
-    if (!q) return menuCategories;
-    return menuCategories
-      .map((c) => {
-        let dishes = c.dishes || [];
-        if (q) {
-          dishes = dishes.filter((d) => {
-            const haystack = `${d.name || ""} ${d.description || ""}`.toLowerCase();
-            return haystack.includes(q);
-          });
-        }
-        return { ...c, dishes };
-      })
-      .filter((c) => (c.dishes || []).length > 0);
-  }, [menuCategories, debouncedSearch]);
+  const headerActionsHome = useMemo(() => <MenuHeaderActions tone="dark" />, []);
+  const headerActionsInner = useMemo(() => <MenuHeaderActions tone="light" />, []);
 
-  const isFiltering = Boolean(debouncedSearch.trim());
-  const chipCategories = isFiltering ? filteredCategories : menuCategories;
+  const goBack = useCallback(() => {
+    if (window.history.length > 1) navigate(-1);
+    else navigate(basePath);
+  }, [basePath, navigate]);
 
-  useEffect(() => {
-    if (!chipCategories.length) {
-      setActiveCategoryId(null);
-      return;
-    }
-    setActiveCategoryId((prev) => {
-      if (prev && chipCategories.some((c) => c.id === prev)) return prev;
-      return chipCategories[0].id;
-    });
-  }, [chipCategories]);
+  const homeNextPath = useMemo(() => {
+    if (navCategories.length) return `${basePath}/c/${navCategories[0].id}`;
+    return null;
+  }, [basePath, navCategories]);
 
-  useEffect(() => {
-    if (!expandedCategoryId) return;
-    if (!filteredCategories.some((c) => c.id === expandedCategoryId)) setExpandedCategoryId(null);
-  }, [expandedCategoryId, filteredCategories]);
-
-  // NOTE: We intentionally do NOT auto-switch the active category while the user scrolls.
-  // The active chip changes only on user click.
+  const homeNext = useCallback(() => {
+    if (!homeNextPath) return;
+    navigate(homeNextPath);
+  }, [navigate, homeNextPath]);
 
   async function submitWaiter() {
     if (!hasTable) return;
@@ -352,330 +594,146 @@ export default function PublicMenuPage() {
     setWaiterReasons({ water: false, bill: false, help: false });
   }
 
-  if (restaurantQuery.isLoading || menuQuery.isLoading) return <MenuSkeleton />;
+  const loaderImageUrl = restaurant?.loading_image_url || cachedStyle?.loaderImageUrl || null;
+  const loaderVariant = restaurant?.loading_style || cachedStyle?.loaderStyle || "spinner";
+  const isFetching = (restaurantQuery.isFetching && !restaurantQuery.isLoading) || (menuQuery.isFetching && !menuQuery.isLoading);
+  const [showFetchLoader, setShowFetchLoader] = useState(false);
+  useEffect(() => {
+    if (!isFetching) {
+      setShowFetchLoader(false);
+      return undefined;
+    }
+    const id = window.setTimeout(() => setShowFetchLoader(true), 220);
+    return () => window.clearTimeout(id);
+  }, [isFetching]);
 
-  if (restaurantQuery.isError || menuQuery.isError) {
+  if (restaurantQuery.isLoading || menuQuery.isLoading) {
     return (
-      <div className="container py-10">
-        <EmptyState
-          icon={UtensilsCrossed}
-          title={t("common.error")}
-          description={t("public.menu.loadFailed")}
-        />
-      </div>
+      <ThemeProvider theme={publicTheme} className={shellStyles.shell}>
+        <PublicMenuLoader mode="screen" imageUrl={loaderImageUrl} variant={loaderVariant} />
+      </ThemeProvider>
     );
   }
 
+  if (restaurantQuery.isError || menuQuery.isError) {
+      return (
+        <div className={shellStyles.shell}>
+          <div style={{ paddingTop: "env(safe-area-inset-top)" }}>
+            <div style={{ width: "min(100%, 1080px)", margin: "0 auto", padding: "24px 16px" }}>
+              <EmptyState icon={UtensilsCrossed} title={t("common.error")} description={t("public.menu.loadFailed")} />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
   return (
-    <div className="min-h-screen">
-      {/* Sticky mini-header after scroll */}
-      <AnimatePresence>
-        {compactHeader ? (
-          <motion.div
-            initial={{ y: -14, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: -14, opacity: 0 }}
-            transition={{ duration: 0.22, ease: "easeOut" }}
-            className="fixed inset-x-0 top-0 z-40 border-b bg-background/70 pt-safe backdrop-blur-md shadow-sm"
-          >
-            <div className="container flex h-16 items-center gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                {restaurant?.logo_url ? (
-                  <img
-                    src={restaurant.logo_url}
-                    alt={restaurant.name}
-                    className="h-9 w-9 rounded-2xl border object-cover"
-                    loading="lazy"
-                    width={72}
-                    height={72}
-                  />
-                ) : (
-                  <div className="flex h-9 w-9 items-center justify-center rounded-2xl border bg-card/70">
-                    <Sparkles className="h-4 w-4 text-muted-foreground" />
-                  </div>
-                )}
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold">{restaurant?.name ?? slug}</div>
-                  {hasTable ? (
-                    <div className="truncate text-xs text-muted-foreground">
-                      {t("public.table")}: <span className="font-medium text-foreground">{tableId}</span>
-                    </div>
-                  ) : (
-                    <div className="truncate text-xs text-muted-foreground">{t("public.welcome")}</div>
-                  )}
-                </div>
-              </div>
-
-              <div className="relative min-w-0 flex-1">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder={t("common.searchDish")}
-                  className="h-11 rounded-2xl pl-9"
+    <ThemeProvider
+      theme={publicTheme}
+      className={shellStyles.shell}
+      style={{
+        "--menu-font-body": baseFont.fontFamily,
+        "--menu-font-brand": brandFont.fontFamily,
+        "--menu-font-category": categoryFont.fontFamily,
+        "--menu-font-item": itemFont.fontFamily,
+        "--menu-font-brand-size": brandFontSize ? `${brandFontSize}px` : undefined,
+        "--menu-font-category-size": categoryFontSize ? `${categoryFontSize}px` : undefined,
+        "--menu-font-item-size": itemFontSize ? `${itemFontSize}px` : undefined,
+      }}
+    >
+      <MenuCardProvider config={restaurant?.menu_card?.config || null}>
+        <AnimatePresence>
+          {showFetchLoader ? <PublicMenuLoader key="pm-fetch-loader" mode="overlay" imageUrl={loaderImageUrl} variant={loaderVariant} /> : null}
+        </AnimatePresence>
+        <PublicMenuAnimatedRoutes
+          lockMs={540}
+          modalRoutes={
+            <Route
+              path="dish/:dishId"
+              element={
+                <PublicMenuDishModalRoute
+                  dishById={dishById}
+                  cartQtyById={cartQtyById}
+                  onIncrease={increaseCart}
+                  onDecrease={decreaseCart}
+                  basePath={basePath}
                 />
-              </div>
-
-              <LanguageSwitcher />
-              <ThemeToggle />
-            </div>
-
-            <div className="container pb-3">
-              <div ref={stickyChipsRef} className="flex gap-2 overflow-x-auto overflow-y-hidden pb-1 no-scrollbar">
-                {chipCategories.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => {
-                      setActiveCategoryId(c.id);
-                      setExpandedCategoryId(c.id);
-                      const el = sectionRefs.current[c.id];
-                      el?.scrollIntoView({ behavior: "smooth", block: "start" });
-                    }}
-                    data-cat-id={c.id}
-                    className={[
-                      "shrink-0 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors active:scale-95",
-                      activeCategoryId === c.id
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-card/70 hover:bg-card",
-                    ].join(" ")}
-                  >
-                    {c.icon_name ? <CategoryIcon name={c.icon_name} className="h-4 w-4" /> : null}
-                    {c.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-
-      {/* Hero header */}
-      <div className="relative overflow-hidden">
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute -top-24 left-1/2 h-80 w-[40rem] -translate-x-1/2 rounded-full bg-primary/15 blur-3xl" />
-          <div className="absolute -top-12 right-[-6rem] h-64 w-64 rounded-full bg-amber-300/10 blur-3xl" />
-        </div>
-
-        <div className="container relative pt-8 pb-5">
-          <div className="flex items-start justify-end gap-1">
-            <LanguageSwitcher />
-            <ThemeToggle />
-          </div>
-
-          <div className="mx-auto mt-2 max-w-md text-center">
-            {restaurant?.logo_url ? (
-              <img
-                src={restaurant.logo_url}
-                alt={restaurant.name}
-                className="mx-auto h-24 w-24 rounded-3xl border bg-card object-cover shadow-sm"
-                loading="lazy"
-                width={192}
-                height={192}
-              />
-            ) : (
-              <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-3xl border bg-card/70 shadow-sm backdrop-blur">
-                <Sparkles className="h-6 w-6 text-muted-foreground" />
-              </div>
-            )}
-
-            <h1 className="mt-4 text-2xl font-semibold tracking-tight">{restaurant?.name ?? slug}</h1>
-            <div className="mt-1 text-sm text-muted-foreground">
-              {restaurant?.description ? restaurant.description : t("public.welcome")}
-            </div>
-
-            {hasTable ? (
-              <div className="mt-3 inline-flex items-center gap-2 rounded-full border bg-card/70 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur">
-                <span>{t("public.table")}</span>
-                <span className="font-semibold text-foreground">{tableId}</span>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="mx-auto mt-6 grid max-w-xl gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={t("common.searchDish")}
-                className="h-11 rounded-2xl pl-9"
-              />
-            </div>
-
-            <div className="sm:flex sm:justify-end">
-              {hasTable ? (
-                <Button
-                  type="button"
-                  className="h-11 w-full rounded-2xl sm:w-auto"
-                  onClick={() => setWaiterOpen(true)}
-                  disabled={waiterMutation.isPending}
-                >
-                  {t("public.callWaiter")}
-                </Button>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="mx-auto mt-4 max-w-xl">
-            <div ref={heroChipsRef} className="flex gap-2 overflow-x-auto overflow-y-hidden pb-1 no-scrollbar">
-              {chipCategories.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => {
-                    setActiveCategoryId(c.id);
-                    setExpandedCategoryId(c.id);
-                    const el = sectionRefs.current[c.id];
-                    el?.scrollIntoView({ behavior: "smooth", block: "start" });
-                  }}
-                  data-cat-id={c.id}
-                  className={[
-                    "shrink-0 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors active:scale-95",
-                    activeCategoryId === c.id ? "bg-primary text-primary-foreground border-primary" : "bg-card/70 hover:bg-card",
-                  ].join(" ")}
-                >
-                  {c.icon_name ? <CategoryIcon name={c.icon_name} className="h-4 w-4" /> : null}
-                  {c.name}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div ref={heroSentinelRef} className="h-0.5" />
-        </div>
-      </div>
-
-      <div className="container pb-10 pt-6">
-        {menuCategories.length === 0 ? (
-          <EmptyState icon={UtensilsCrossed} title={t("public.menu.emptyAll.title")} description={t("public.menu.emptyAll.desc")} />
-        ) : filteredCategories.length === 0 ? (
-          <EmptyState icon={UtensilsCrossed} title={t("public.menu.noResults.title")} description={t("public.menu.noResults.desc")} />
-        ) : (
-          <div className="space-y-10">
-            {filteredCategories.map((c) => (
-              (() => {
-                const dishes = c.dishes || [];
-                const isExpanded = expandedCategoryId === c.id;
-                const previewDish = dishes.find((d) => d?.image_url) || dishes[0] || null;
-                const extraCount = Math.max(0, dishes.length - 1);
-
-                return (
-              <section
-                key={c.id}
-                data-category-id={c.id}
-                ref={(el) => {
-                  if (el) sectionRefs.current[c.id] = el;
-                }}
-                className="scroll-mt-48"
+              }
+            />
+          }
+        >
+          <Route
+            index
+            element={
+              <PageCurlWrapper
+                mode={routeTransitionMode}
+                enableGestures={homeGesturesEnabled}
+                enableArrowKeys={homeGesturesEnabled}
+                onSwipeLeft={homeGesturesEnabled && homeNextPath ? homeNext : undefined}
               >
-                <button
-                  type="button"
-                  className="w-full rounded-2xl border bg-card/70 px-4 py-3 text-left shadow-sm backdrop-blur transition-colors hover:bg-card active:scale-[0.99]"
-                  onClick={() => {
-                    setActiveCategoryId(c.id);
-                    setExpandedCategoryId((prev) => (prev === c.id ? null : c.id));
-                    if (!isExpanded) {
-                      const el = sectionRefs.current[c.id];
-                      if (el && typeof el.scrollIntoView === "function") {
-                        window.requestAnimationFrame(() => {
-                          el.scrollIntoView({ behavior: "smooth", block: "start" });
-                        });
-                      }
-                    }
-                  }}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        {c.icon_name ? <CategoryIcon name={c.icon_name} className="h-4 w-4 text-muted-foreground" /> : null}
-                        <h2 className="truncate text-base font-semibold">{c.name}</h2>
-                        {extraCount > 0 && !isExpanded ? (
-                          <span className="shrink-0 rounded-full border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground">
-                            +{extraCount}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="mt-1 text-xs text-muted-foreground">{dishes.length}</div>
-                    </div>
-
-                    <motion.span
-                      className="mt-0.5 inline-flex h-9 w-9 items-center justify-center rounded-full border bg-background/60 text-muted-foreground"
-                      animate={{ rotate: isExpanded ? 180 : 0 }}
-                      transition={{ duration: 0.18, ease: "easeOut" }}
-                    >
-                      <ChevronDown className="h-4 w-4" />
-                    </motion.span>
-                  </div>
-                </button>
-
-                <div className="mt-3">
-                  <AnimatePresence initial={false} mode="wait">
-                    {isExpanded ? (
-                      <motion.div
-                        key="grid"
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.22, ease: "easeOut" }}
-                        style={{ overflow: "hidden" }}
-                      >
-                        <motion.div
-                          variants={gridVariants}
-                          initial="hidden"
-                          animate="show"
-                          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
-                        >
-                          {dishes.map((d) => (
-                            <motion.div key={d.id} variants={cardVariants} layout>
-                              <DishCard
-                                dish={d}
-                                onOpen={(dish) => {
-                                  setSelectedDish(dish);
-                                  setDishDetailsOpen(true);
-                                }}
-                              />
-                            </motion.div>
-                          ))}
-                        </motion.div>
-                      </motion.div>
-                    ) : (
-                      <motion.div
-                        key="preview"
-                        initial={{ opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -6 }}
-                        transition={{ duration: 0.18, ease: "easeOut" }}
-                      >
-                        {previewDish ? (
-                          <DishCard
-                            dish={previewDish}
-                            onOpen={(dish) => {
-                              setSelectedDish(dish);
-                              setDishDetailsOpen(true);
-                            }}
-                          />
-                        ) : null}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              </section>
-                );
-              })()
-            ))}
-          </div>
-        )}
-      </div>
-
-      <DishDetailsModal
-        dish={selectedDish}
-        open={dishDetailsOpen}
-        onOpenChange={setDishDetailsOpen}
-        quantity={selectedDish ? cartQtyById.get(selectedDish.id) || 0 : 0}
-        onIncrease={increaseCart}
-        onDecrease={decreaseCart}
-      />
+                <PublicMenuHome
+                  restaurant={restaurant}
+                  slug={slug}
+                  tableId={tableId}
+                  categories={menuCategories}
+                  basePath={basePath}
+                  mealsAvailable={mealsAvailable}
+                  rightSlot={headerActionsHome}
+                />
+              </PageCurlWrapper>
+              }
+            />
+          <Route
+            path="c/:categoryId"
+            element={
+              <PublicMenuCategoryRoute
+                restaurant={restaurant}
+                slug={slug}
+                tableId={tableId}
+                menuCategories={menuCategories}
+                navCategories={navCategories}
+                mealsAvailable={mealsAvailable}
+                mealsCategoryId={mealsCategory?.id || null}
+                basePath={basePath}
+                rightSlot={headerActionsInner}
+                activeDishId={activeDishId}
+                transitionMode={routeTransitionMode}
+              />
+            }
+          />
+          <Route
+            path="meals"
+            element={
+              <PublicMenuMealsRoute
+                restaurant={restaurant}
+                slug={slug}
+                mealsCategory={mealsCategory}
+                basePath={basePath}
+                rightSlot={headerActionsInner}
+                activeDishId={activeDishId}
+                transitionMode={routeTransitionMode}
+              />
+            }
+          />
+          <Route
+            path="contact"
+            element={
+              <PageCurlWrapper mode="sheet" enableGestures enableArrowKeys onSwipeRight={goBack}>
+                <ContactPage
+                  restaurant={restaurant}
+                  slug={slug}
+                  tableId={tableId}
+                  backTo={basePath}
+                  rightSlot={headerActionsInner}
+                  onOpenWaiter={() => setWaiterOpen(true)}
+                  waiterPending={waiterMutation.isPending}
+                />
+              </PageCurlWrapper>
+            }
+          />
+          <Route path="*" element={<Navigate to={basePath} replace />} />
+        </PublicMenuAnimatedRoutes>
+      </MenuCardProvider>
 
       <Dialog open={waiterOpen} onOpenChange={setWaiterOpen}>
         <DialogContent variant="bottom" className="max-w-lg">
@@ -736,122 +794,85 @@ export default function PublicMenuPage() {
       </Dialog>
 
       <Dialog open={cartOpen} onOpenChange={setCartOpen}>
-        <DialogContent variant="bottom" className="max-w-lg p-0 overflow-hidden max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
-          <div className="p-6 pb-4">
-            <DialogHeader>
-              <DialogTitle>{t("public.cart")}</DialogTitle>
-            </DialogHeader>
-            <div className="mt-1 text-sm text-muted-foreground">
+        <DialogContent
+          variant="bottom"
+          showCloseButton={false}
+          className="p-0 max-h-[85dvh] sm:max-h-[min(680px,calc(100dvh-2rem))] overflow-hidden"
+        >
+          <div className="flex max-h-[85dvh] flex-col sm:max-h-[min(680px,calc(100dvh-2rem))]">
+            <div className="px-4 pt-3">
+              <div className="mx-auto h-1.5 w-10 rounded-full bg-black/10" aria-hidden="true" />
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <DialogHeader className="text-left">
+                  <DialogTitle className="text-base">{t("public.cart")}</DialogTitle>
+                </DialogHeader>
+                <DialogClose asChild>
+                  <Button type="button" variant="ghost" size="icon" className="h-10 w-10 rounded-full" aria-label={t("common.close")}>
+                    <X className="h-5 w-5" />
+                  </Button>
+                </DialogClose>
+              </div>
+
               {hasTable ? (
-                <>
+                <div className="mt-1 text-xs text-muted-foreground">
                   {t("public.table")}: <span className="font-medium text-foreground">{tableId}</span>
-                </>
+                </div>
               ) : null}
             </div>
-          </div>
 
-          <div className="px-6 pb-6">
-            {cartItems.length ? (
-              <div className="space-y-2">
-                {cartItems.map((item) => (
-                  <div key={item.id} className="flex items-center justify-between gap-3 rounded-2xl border bg-card/70 p-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold">{item.name}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {formatMoney(item.price, item.currency)}
-                      </div>
-                    </div>
+            <div className="mt-3 flex-1 overflow-y-auto px-4 pb-4">
+              {cartItems.length ? (
+                <div className="space-y-2">
+                  {cartItems.map((item) => (
+                    <CartItemRow
+                      key={item.id}
+                      item={item}
+                      onIncrease={increaseCartItem}
+                      onDecrease={decreaseCartItem}
+                      onRemove={removeCartItem}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border bg-card/70 p-5 text-center text-sm text-muted-foreground">{t("public.cart.empty")}</div>
+              )}
+            </div>
 
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        className="h-9 w-9 rounded-full"
-                        onClick={() => decreaseCart(item.id)}
-                      >
-                        <Minus className="h-4 w-4" />
-                      </Button>
-                      <span className="w-8 text-center text-sm font-semibold tabular-nums">{item.qty}</span>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        className="h-9 w-9 rounded-full"
-                        onClick={() => setCartItems((prev) => prev.map((x) => (x.id === item.id ? { ...x, qty: x.qty + 1 } : x)))}
-                      >
-                        <Plus className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-9 w-9 rounded-full"
-                        onClick={() => removeFromCart(item.id)}
-                        aria-label="Remove"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
+            <div className="sticky bottom-0 border-t bg-background/80 backdrop-blur-sm px-4 pt-3 pb-[calc(12px+env(safe-area-inset-bottom))]">
+              {cartTotal ? (
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-sm font-medium">{t("public.cart.total")}</div>
+                  <div className="text-sm font-semibold">{formatMoney(cartTotal.total, cartTotal.currency)}</div>
+                </div>
+              ) : null}
+
+              <div className="grid gap-2 sm:grid-cols-2 sm:items-center">
+                <DialogClose asChild>
+                  <Button type="button" className="w-full">
+                    {t("common.close")}
+                  </Button>
+                </DialogClose>
+                <Button type="button" variant="destructive" onClick={clearCartStable} disabled={!cartItems.length} className="w-full">
+                  {t("public.cart.clear")}
+                </Button>
               </div>
-            ) : (
-              <div className="rounded-2xl border bg-card/70 p-6 text-center text-sm text-muted-foreground">
-                {t("public.cart.empty")}
-              </div>
-            )}
-
-            {cartTotal ? (
-              <div className="mt-4 flex items-center justify-between rounded-2xl border bg-card/70 px-4 py-3">
-                <div className="text-sm font-medium">{t("public.cart.total")}</div>
-                <div className="text-sm font-semibold">{formatMoney(cartTotal.total, cartTotal.currency)}</div>
-              </div>
-            ) : null}
-
-            <DialogFooter className="mt-5">
-              <Button type="button" variant="secondary" onClick={() => setCartOpen(false)}>
-                {t("common.close")}
-              </Button>
-              <Button type="button" variant="destructive" onClick={clearCart} disabled={!cartItems.length}>
-                {t("public.cart.clear")}
-              </Button>
-            </DialogFooter>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
 
-      <motion.button
+      <button
         type="button"
+        className={[styles.cartFab, "menuFloatingAction"].join(" ")}
+        style={{ "--menu-cart-offset": "86px" }}
         onClick={() => setCartOpen(true)}
-        className="fixed right-4 z-40 inline-flex h-11 items-center gap-2 rounded-full border bg-background/80 px-3 shadow-sm backdrop-blur transition-colors hover:bg-background active:scale-95"
-        style={{ bottom: "calc(1rem + env(safe-area-inset-bottom))" }}
         aria-label={t("public.cart.open")}
-        initial={{ opacity: 0, y: 10, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ duration: 0.18, ease: "easeOut" }}
       >
-        <ShoppingCart className="h-4 w-4" />
-        <span className="min-w-4 text-right text-sm font-semibold tabular-nums">{cartCount}</span>
-      </motion.button>
+        <ShoppingCart aria-hidden="true" />
+        <span className={styles.cartCount}>{cartCount}</span>
+      </button>
 
-      <AnimatePresence>
-        {showToTop ? (
-          <motion.button
-            type="button"
-            onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-            className="fixed right-4 z-40 inline-flex h-11 w-11 items-center justify-center rounded-full border bg-background/80 shadow-sm backdrop-blur transition-colors hover:bg-background active:scale-95"
-            style={{ bottom: "calc(1rem + env(safe-area-inset-bottom) + 3.25rem)" }}
-            aria-label={t("public.toTop")}
-            initial={{ opacity: 0, y: 10, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 10, scale: 0.98 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
-          >
-            <ArrowUp className="h-4 w-4" />
-          </motion.button>
-        ) : null}
-      </AnimatePresence>
-    </div>
+      <FloatingActionButton restaurant={restaurant} basePath={basePath} />
+    </ThemeProvider>
   );
 }

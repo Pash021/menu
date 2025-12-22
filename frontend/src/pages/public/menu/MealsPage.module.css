@@ -1,0 +1,136 @@
+.page {
+  padding-bottom: 14px;
+}
+
+.stack {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  contain: layout paint;
+}
+
+.mealTilt {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: var(--menu-radius-card);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.sharedHidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.mealTilt:focus-visible {
+  outline: 3px solid rgba(243, 154, 30, 0.35);
+  outline-offset: 4px;
+  border-radius: var(--menu-radius-card);
+}
+
+.mealCard {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.02)),
+    var(--meal-bg);
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  align-items: stretch;
+}
+
+.mealCard[data-reverse="true"] {
+  grid-template-columns: 0.9fr 1.1fr;
+}
+
+.mealCard[data-reverse="true"] .mealBody {
+  order: 2;
+}
+
+.mealCard[data-reverse="true"] .mealMedia {
+  order: 1;
+}
+
+.mealBody {
+  padding: 16px 16px 18px;
+  color: rgba(255, 255, 255, 0.96);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+.price {
+  font-size: 1.625rem;
+  font-weight: 950;
+  letter-spacing: -0.02em;
+}
+
+.name {
+  font-size: 1rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.desc {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  opacity: 0.95;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.mealMedia {
+  position: relative;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: saturate(1.02);
+}
+
+.noImage {
+  font-size: 0.8125rem;
+  color: rgba(255, 255, 255, 0.92);
+  padding: 18px;
+  text-align: center;
+}
+
+.empty {
+  margin-top: 16px;
+  border-radius: var(--menu-radius-card);
+  background: var(--menu-surface);
+  border: 1px solid var(--menu-border);
+  box-shadow: var(--menu-shadow-soft);
+  padding: 18px 16px;
+  text-align: center;
+}
+
+.emptyTitle {
+  font-weight: 900;
+  color: var(--menu-text-primary);
+}
+
+.emptyText {
+  margin-top: 6px;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--menu-text-muted);
+}
+
+@media (min-width: 640px) {
+  .mealBody {
+    padding: 18px 18px 20px;
+  }
+
+  .price {
+    font-size: 1.875rem;
+  }
+}
